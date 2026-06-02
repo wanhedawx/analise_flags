@@ -1,27 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-APP STREAMLIT - ANÁLISE DE ALTERAÇÃO DE FLAGS x CARTEIRA x ESTOQUE
-
-Como usar:
-1) Instale uma vez:
-   pip install streamlit pandas openpyxl
-
-2) Execute:
-   streamlit run app_analise_flags_streamlit.py
-
-3) Na tela, importe os 3 arquivos:
-   - Alteração de flags recebido por e-mail
-   - Carteira com agendamento / carteira sem pré-nota
-   - Cobertura / Cobertura Pura
-
-Regra:
-- A/I/V/K/L/P -> B/D/F/X = RISCO IMPRODUTIVO
-- B/D/F/X -> A/I/V/K/L/P = RISCO RUPTURA
-
-Estoque:
-- Usa DISP. VEND. / QTD DISP. VENDA como quantidade disponível para venda.
-"""
-
 from io import BytesIO
 import re
 import pandas as pd
@@ -113,8 +89,8 @@ def carrega_excel(uploaded_file):
 def carrega_flags(uploaded_file):
     df = carrega_excel(uploaded_file)
 
-    mascara_cabecalho = df.astype(str).apply(
-        lambda r: any("CABEÇALHO DE SISTEMA" in x.upper() for x in r), axis=1
+    mascara_cabecalho = df.apply(
+        lambda r: any("CABEÇALHO DE SISTEMA" in str(x).upper() for x in r), axis=1
     )
     df = df[~mascara_cabecalho].copy()
 
@@ -330,11 +306,6 @@ with st.sidebar:
     arq_carteira = st.file_uploader("2) Carteira com agendamento", type=["xlsx", "xls"])
     arq_cobertura = st.file_uploader("3) Cobertura / Cobertura Pura", type=["xlsx", "xls"])
 
-    st.divider()
-    st.markdown("**Regra usada**")
-    st.write("A/I/V/K/L/P → B/D/F/X = RISCO IMPRODUTIVO")
-    st.write("B/D/F/X → A/I/V/K/L/P = RISCO RUPTURA")
-    st.write("Estoque = DISP. VEND. / QTD DISP. VENDA")
 
 if not (arq_flags and arq_carteira and arq_cobertura):
     st.info("Importe os 3 arquivos na lateral para gerar a análise.")
