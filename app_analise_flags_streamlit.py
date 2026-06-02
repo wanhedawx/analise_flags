@@ -1,4 +1,6 @@
+
 from io import BytesIO
+from zipfile import ZipFile, ZIP_DEFLATED
 import re
 import pandas as pd
 import streamlit as st
@@ -20,6 +22,13 @@ def moeda(v):
         return "R$ 0,00"
 
 
+def nome_seguro(nome):
+    nome = re.sub(r"\.[A-Za-z0-9]+$", "", str(nome))
+    nome = re.sub(r"[^A-Za-z0-9_ -]", "", nome).strip()
+    nome = re.sub(r"\s+", "_", nome)
+    return nome[:80] or "resultado"
+
+
 def normaliza_codigo(valor):
     if pd.isna(valor):
         return ""
@@ -39,12 +48,16 @@ def normaliza_flag(valor):
 
 def limpa_nome_coluna(nome):
     s = str(nome).strip().upper()
-    s = s.replace("Á", "A").replace("À", "A").replace("Ã", "A").replace("Â", "A")
-    s = s.replace("É", "E").replace("Ê", "E")
-    s = s.replace("Í", "I")
-    s = s.replace("Ó", "O").replace("Ô", "O").replace("Õ", "O")
-    s = s.replace("Ú", "U")
-    s = s.replace("Ç", "C")
+    trocas = {
+        "Á": "A", "À": "A", "Ã": "A", "Â": "A",
+        "É": "E", "Ê": "E",
+        "Í": "I",
+        "Ó": "O", "Ô": "O", "Õ": "O",
+        "Ú": "U",
+        "Ç": "C",
+    }
+    for a, b in trocas.items():
+        s = s.replace(a, b)
     s = re.sub(r"\s+", " ", s)
     return s
 
@@ -89,6 +102,7 @@ def carrega_excel(uploaded_file):
 def carrega_flags(uploaded_file):
     df = carrega_excel(uploaded_file)
 
+    # Correção: converte cada célula para string antes de usar upper().
     mascara_cabecalho = df.apply(
         lambda r: any("CABEÇALHO DE SISTEMA" in str(x).upper() for x in r), axis=1
     )
@@ -96,11 +110,11 @@ def carrega_flags(uploaded_file):
 
     col_codigo = primeira_coluna_existente(df, [
         "COD.TOTVS", "COD.TOTVS.1", "CODIGO", "CÓD. PRODUTO", "COD. PRODUTO",
-        "COD PRODUTO", "COD_PROD", "Cod_Prod", "COD PROD", "COD.PRODUTO"
+        "COD PRODUTO", "COD_PROD", "Cod_Prod", "COD PROD", "COD.PRODUTO", "CD ABASTECE"
     ], contexto="do código do produto no arquivo de flags")
 
     col_desc = primeira_coluna_existente(df, [
-        "DESCRIÇÃO", "DESCRICAO", "DESC. PRODUTO", "DESC_PROD", "Desc_Prod", "PRODUTO"
+        "DESCRIÇÃO", "DESCRICAO", "DESC. PRODUTO", "DESC_PROD", "Desc_Prod", "PRODUTO", "DESCRICAO PRODUTO"
     ], obrigatoria=False)
 
     col_nova = primeira_coluna_existente(df, [
@@ -220,11 +234,8 @@ def carrega_cobertura(uploaded_file):
     )
 
 
-def montar_analise(arq_flags, arq_carteira, arq_cobertura):
+def montar_analise(arq_flags, carteira, cobertura):
     flags = carrega_flags(arq_flags)
-    carteira = carrega_carteira(arq_carteira)
-    cobertura = carrega_cobertura(arq_cobertura)
-
     base = flags.merge(carteira, on="CODIGO", how="left").merge(cobertura, on="CODIGO", how="left")
 
     for c in ["CARTEIRA_CMV", "PRE_NOTA_CMV", "NAO_FATURADO_CMV", "ESTOQUE_QTD_TOTAL", "ESTOQUE_VALOR"]:
@@ -289,6 +300,15 @@ def gerar_excel(base, resumo, por_movimento):
     return output.getvalue()
 
 
+def gerar_zip(resultados):
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as zf:
+        for nome_arquivo, excel_bytes in resultados:
+            zf.writestr(nome_arquivo, excel_bytes)
+    output.seek(0)
+    return output.getvalue()
+
+
 def formatar_tabela(df):
     money_cols = [c for c in df.columns if c.endswith("CMV") or c == "ESTOQUE_VALOR"]
     fmt = {c: moeda for c in money_cols}
@@ -302,81 +322,124 @@ st.caption("Cruza alteração de flag com carteira, pré-nota e estoque disponí
 
 with st.sidebar:
     st.header("Importar arquivos")
-    arq_flags = st.file_uploader("1) Alteração de flags", type=["xlsx", "xls"])
+    arq_flags_lista = st.file_uploader(
+        "1) Alteração de flags",
+        type=["xlsx", "xls"],
+        accept_multiple_files=True,
+        help="Você pode selecionar um ou vários arquivos de alteração de flags."
+    )
     arq_carteira = st.file_uploader("2) Carteira com agendamento", type=["xlsx", "xls"])
     arq_cobertura = st.file_uploader("3) Cobertura / Cobertura Pura", type=["xlsx", "xls"])
 
-
-if not (arq_flags and arq_carteira and arq_cobertura):
-    st.info("Importe os 3 arquivos na lateral para gerar a análise.")
+if not (arq_flags_lista and arq_carteira and arq_cobertura):
+    st.info("Importe a carteira, a cobertura e pelo menos 1 arquivo de alteração de flags na lateral.")
     st.stop()
 
 try:
-    with st.spinner("Processando arquivos..."):
-        base, resumo, por_movimento = montar_analise(arq_flags, arq_carteira, arq_cobertura)
-        excel_bytes = gerar_excel(base, resumo, por_movimento)
+    with st.spinner("Lendo carteira e cobertura..."):
+        carteira = carrega_carteira(arq_carteira)
+        cobertura = carrega_cobertura(arq_cobertura)
 
-    st.success("Análise concluída.")
+    resultados_zip = []
+    bases_consolidadas = []
 
-    total_itens = int(base["CODIGO"].nunique())
-    total_carteira = base["CARTEIRA_CMV"].sum()
-    total_estoque_qtd = base["ESTOQUE_QTD_TOTAL"].sum()
-    total_estoque_valor = base["ESTOQUE_VALOR"].sum()
-    total_pre_nota = base["PRE_NOTA_CMV"].sum()
+    st.success("Arquivos carregados. Análise concluída.")
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Itens impactados", f"{total_itens:,.0f}".replace(",", "."))
-    c2.metric("Carteira", moeda(total_carteira))
-    c3.metric("Pré-nota", moeda(total_pre_nota))
-    c4.metric("Estoque qtd", f"{total_estoque_qtd:,.0f}".replace(",", "."))
-    c5.metric("Estoque valor", moeda(total_estoque_valor))
+    for idx, arq_flags in enumerate(arq_flags_lista, start=1):
+        nome_base = nome_seguro(arq_flags.name)
 
-    st.download_button(
-        "⬇️ Baixar resultado em Excel",
-        data=excel_bytes,
-        file_name="resultado_analise_flags.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+        with st.spinner(f"Processando {arq_flags.name}..."):
+            base, resumo, por_movimento = montar_analise(arq_flags, carteira, cobertura)
+            excel_bytes = gerar_excel(base, resumo, por_movimento)
+            resultados_zip.append((f"resultado_{nome_base}.xlsx", excel_bytes))
+            base_tmp = base.copy()
+            base_tmp["ARQUIVO_FLAGS"] = arq_flags.name
+            bases_consolidadas.append(base_tmp)
 
-    aba1, aba2, aba3, aba4 = st.tabs(["Resumo", "Por movimento", "Detalhe", "Filtros"])
+        st.markdown(f"---")
+        st.subheader(f"📄 {idx}. {arq_flags.name}")
 
-    with aba1:
-        st.subheader("Resumo por situação")
-        st.dataframe(formatar_tabela(resumo), use_container_width=True, hide_index=True)
+        total_itens = int(base["CODIGO"].nunique())
+        total_carteira = base["CARTEIRA_CMV"].sum()
+        total_estoque_qtd = base["ESTOQUE_QTD_TOTAL"].sum()
+        total_estoque_valor = base["ESTOQUE_VALOR"].sum()
+        total_pre_nota = base["PRE_NOTA_CMV"].sum()
 
-        graf = resumo.set_index("SITUACAO")[["CARTEIRA_CMV", "ESTOQUE_VALOR"]]
-        st.bar_chart(graf)
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Itens impactados", f"{total_itens:,.0f}".replace(",", "."))
+        c2.metric("Carteira", moeda(total_carteira))
+        c3.metric("Pré-nota", moeda(total_pre_nota))
+        c4.metric("Estoque qtd", f"{total_estoque_qtd:,.0f}".replace(",", "."))
+        c5.metric("Estoque valor", moeda(total_estoque_valor))
 
-    with aba2:
-        st.subheader("Resumo por movimento")
-        st.dataframe(formatar_tabela(por_movimento), use_container_width=True, hide_index=True)
+        st.download_button(
+            f"⬇️ Baixar Excel - {arq_flags.name}",
+            data=excel_bytes,
+            file_name=f"resultado_{nome_base}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"download_excel_{idx}_{nome_base}",
+        )
 
-    with aba3:
-        st.subheader("Detalhe dos produtos")
-        colunas = [
-            "CODIGO", "DESCRICAO", "FLAG_ANTERIOR", "FLAG_NOVA", "MOVIMENTO", "SITUACAO",
-            "CARTEIRA_CMV", "PRE_NOTA_CMV", "NAO_FATURADO_CMV", "PRE_NOTA",
-            "ESTOQUE_QTD_TOTAL", "ESTOQUE_VALOR", "SITUACAO_CARTEIRA_ESTOQUE"
-        ]
-        colunas = [c for c in colunas if c in base.columns]
-        st.dataframe(formatar_tabela(base[colunas]), use_container_width=True, hide_index=True)
+        aba1, aba2, aba3, aba4 = st.tabs(["Resumo", "Por movimento", "Detalhe", "Filtros"])
 
-    with aba4:
-        st.subheader("Consultar produto ou situação")
-        situacoes = ["Todas"] + sorted(base["SITUACAO"].dropna().unique().tolist())
-        sit = st.selectbox("Situação", situacoes)
-        busca = st.text_input("Buscar por código ou descrição")
+        with aba1:
+            st.subheader("Resumo por situação")
+            st.dataframe(formatar_tabela(resumo), use_container_width=True, hide_index=True)
 
-        filtrado = base.copy()
-        if sit != "Todas":
-            filtrado = filtrado[filtrado["SITUACAO"] == sit]
-        if busca.strip():
-            b = busca.strip().upper()
-            filtrado = filtrado[
-                filtrado["CODIGO"].astype(str).str.upper().str.contains(b, na=False)
-                | filtrado["DESCRICAO"].astype(str).str.upper().str.contains(b, na=False)
+        with aba2:
+            st.subheader("Resumo por movimento")
+            st.dataframe(formatar_tabela(por_movimento), use_container_width=True, hide_index=True)
+
+        with aba3:
+            st.subheader("Detalhe dos produtos")
+            colunas = [
+                "CODIGO", "DESCRICAO", "FLAG_ANTERIOR", "FLAG_NOVA", "MOVIMENTO", "SITUACAO",
+                "CARTEIRA_CMV", "PRE_NOTA_CMV", "NAO_FATURADO_CMV", "PRE_NOTA",
+                "ESTOQUE_QTD_TOTAL", "ESTOQUE_VALOR", "SITUACAO_CARTEIRA_ESTOQUE"
             ]
-        st.dataframe(formatar_tabela(filtrado[colunas]), use_container_width=True, hide_index=True)
+            colunas = [c for c in colunas if c in base.columns]
+            st.dataframe(formatar_tabela(base[colunas]), use_container_width=True, hide_index=True)
+
+        with aba4:
+            st.subheader("Consultar produto ou situação")
+            situacoes = ["Todas"] + sorted(base["SITUACAO"].dropna().unique().tolist())
+            sit = st.selectbox("Situação", situacoes, key=f"situacao_{idx}_{nome_base}")
+            busca = st.text_input("Buscar por código ou descrição", key=f"busca_{idx}_{nome_base}")
+
+            filtrado = base.copy()
+            if sit != "Todas":
+                filtrado = filtrado[filtrado["SITUACAO"] == sit]
+            if busca.strip():
+                b = busca.strip().upper()
+                filtrado = filtrado[
+                    filtrado["CODIGO"].astype(str).str.upper().str.contains(b, na=False)
+                    | filtrado["DESCRICAO"].astype(str).str.upper().str.contains(b, na=False)
+                ]
+            st.dataframe(formatar_tabela(filtrado[colunas]), use_container_width=True, hide_index=True)
+
+    if len(resultados_zip) > 1:
+        st.markdown("---")
+        zip_bytes = gerar_zip(resultados_zip)
+        st.download_button(
+            "⬇️ Baixar todos os resultados em ZIP",
+            data=zip_bytes,
+            file_name="resultados_analise_flags.zip",
+            mime="application/zip",
+        )
+
+    if len(bases_consolidadas) > 1:
+        st.markdown("---")
+        st.subheader("Consolidado de todos os arquivos")
+        base_geral = pd.concat(bases_consolidadas, ignore_index=True)
+        resumo_geral = base_geral.groupby("SITUACAO", as_index=False).agg(
+            ITENS=("CODIGO", "nunique"),
+            CARTEIRA_CMV=("CARTEIRA_CMV", "sum"),
+            PRE_NOTA_CMV=("PRE_NOTA_CMV", "sum"),
+            NAO_FATURADO_CMV=("NAO_FATURADO_CMV", "sum"),
+            ESTOQUE_QTD_TOTAL=("ESTOQUE_QTD_TOTAL", "sum"),
+            ESTOQUE_VALOR=("ESTOQUE_VALOR", "sum"),
+        )
+        st.dataframe(formatar_tabela(resumo_geral), use_container_width=True, hide_index=True)
 
 except Exception as e:
     st.error("Erro na análise")
