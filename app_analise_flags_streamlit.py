@@ -14,9 +14,10 @@ Como usar:
    - Carteira com agendamento / carteira sem pré-nota
    - Cobertura / Cobertura Pura
 
-Regra:
-- A/I/V/K/L/P -> B/D/F/X = RISCO IMPRODUTIVO
-- B/D/F/X -> A/I/V/K/L/P = RISCO RUPTURA
+Regra por STATUS NUMÉRICO (no e-mail pode vir dentro da coluna FLAG):
+- 9 -> 1/3/4/5/6 = RISCO RUPTURA
+- 1/3/4/5/6 -> 9 = RISCO IMPRODUTIVO
+- Status 1 e 6 recebem observação de CD/redistribuição
 
 Estoque:
 - Usa DISP. VENDA e soma TRANSITO + RESERVA, ignorando FAT. LOJA.
@@ -27,8 +28,9 @@ import re
 import pandas as pd
 import streamlit as st
 
-FLAGS_ATIVAS = {"A", "I", "V", "K", "L", "P"}
-FLAGS_RISCO = {"B", "D", "F", "X"}
+STATUS_COMPRA = {"1", "3", "4", "5", "6"}
+STATUS_NAO_COMPRA = {"9"}
+STATUS_CD_LOJA = {"1", "6"}
 
 st.set_page_config(
     page_title="Análise de Flags x Carteira x Estoque",
@@ -53,12 +55,21 @@ def normaliza_codigo(valor):
     return re.sub(r"\D", "", s)
 
 
-def normaliza_flag(valor):
+def normaliza_status(valor):
+    """Extrai o status numérico. No e-mail ele pode vir em coluna chamada FLAG."""
     if pd.isna(valor):
         return ""
-    s = str(valor).strip().upper()
-    letras = re.findall(r"[A-Z]", s)
-    return letras[0] if letras else ""
+    s = str(valor).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    numeros = re.findall(r"\d+", s)
+    if not numeros:
+        return ""
+    # Status válidos que entram na regra atual.
+    for n in numeros:
+        if n in STATUS_COMPRA or n in STATUS_NAO_COMPRA:
+            return n
+    return numeros[0]
 
 
 def limpa_nome_coluna(nome):
@@ -128,32 +139,46 @@ def carrega_flags(uploaded_file):
     ], obrigatoria=False)
 
     col_nova = primeira_coluna_existente(df, [
-        "STATUS PROD", "FLAG ABAST", "FLAG NOVA", "STATUS NOVO", "NOVA FLAG", "FLAG PROD LOJA", "FLAG PROD CD"
-    ], contexto="da flag nova no arquivo de flags")
+        "STATUS PROD", "STATUS NOVO", "STATUS NOVA", "NOVO STATUS",
+        "FLAG ABAST", "FLAG NOVA", "NOVA FLAG", "FLAG PROD LOJA", "FLAG PROD CD",
+        "STATUS", "FLAG"
+    ], contexto="do status novo no arquivo de flags")
 
     col_ant = primeira_coluna_existente(df, [
-        "STATUS ANTERIOR", "FLAG ANTERIOR", "FLAG ANTIGA", "STATUS ANTIGO", "ANTERIOR",
-        "STATUS PROD ANTERIOR", "FLAG ABAST ANTERIOR"
-    ], contexto="da flag anterior no arquivo de flags")
+        "STATUS ANTERIOR", "STATUS ANTIGO", "ANTERIOR", "STATUS PROD ANTERIOR",
+        "FLAG ANTERIOR", "FLAG ANTIGA", "FLAG ABAST ANTERIOR", "ANTIGA FLAG"
+    ], contexto="do status anterior no arquivo de flags")
 
     out = pd.DataFrame()
     out["CODIGO"] = df[col_codigo].map(normaliza_codigo)
     out["DESCRICAO"] = df[col_desc] if col_desc else ""
-    out["FLAG_ANTERIOR"] = df[col_ant].map(normaliza_flag)
-    out["FLAG_NOVA"] = df[col_nova].map(normaliza_flag)
-    out = out[(out["CODIGO"] != "") & (out["FLAG_ANTERIOR"] != "") & (out["FLAG_NOVA"] != "")].copy()
+    out["STATUS_ANTERIOR"] = df[col_ant].map(normaliza_status)
+    out["STATUS_NOVO"] = df[col_nova].map(normaliza_status)
+    out = out[(out["CODIGO"] != "") & (out["STATUS_ANTERIOR"] != "") & (out["STATUS_NOVO"] != "")].copy()
 
     def classificar(row):
-        ant = row["FLAG_ANTERIOR"]
-        nova = row["FLAG_NOVA"]
-        if ant in FLAGS_ATIVAS and nova in FLAGS_RISCO:
-            return "RISCO IMPRODUTIVO"
-        if ant in FLAGS_RISCO and nova in FLAGS_ATIVAS:
+        ant = row["STATUS_ANTERIOR"]
+        nova = row["STATUS_NOVO"]
+        if ant == "9" and nova in STATUS_COMPRA:
             return "RISCO RUPTURA"
+        if ant in STATUS_COMPRA and nova == "9":
+            return "RISCO IMPRODUTIVO"
         return "FORA DA REGRA"
 
-    out["MOVIMENTO"] = out["FLAG_ANTERIOR"] + " -> " + out["FLAG_NOVA"]
+    def observacao_status(row):
+        ant = row["STATUS_ANTERIOR"]
+        nova = row["STATUS_NOVO"]
+        if nova in STATUS_CD_LOJA or ant in STATUS_CD_LOJA:
+            return "STATUS 1/6: validar estoque CD/redistribuição para loja"
+        if ant == "9" and nova in STATUS_COMPRA:
+            return "9 -> compra: atenção para ruptura potencial"
+        if ant in STATUS_COMPRA and nova == "9":
+            return "compra -> 9: atenção para estoque/carteira improdutivos"
+        return ""
+
+    out["MOVIMENTO"] = out["STATUS_ANTERIOR"] + " -> " + out["STATUS_NOVO"]
     out["SITUACAO"] = out.apply(classificar, axis=1)
+    out["OBS_STATUS"] = out.apply(observacao_status, axis=1)
     out = out[out["SITUACAO"] != "FORA DA REGRA"].drop_duplicates()
     return out
 
@@ -374,6 +399,9 @@ def montar_analise(arq_flags, arq_carteira, arq_cobertura):
 def nomes_relatorio(df):
     mapa = {
         "SITUACAO": "SITUAÇÃO",
+        "STATUS_ANTERIOR": "STATUS ANTERIOR",
+        "STATUS_NOVO": "STATUS NOVO",
+        "OBS_STATUS": "OBS STATUS",
         "ITENS_QTD": "ITENS QTD",
         "CARTEIRA_QTD": "CARTEIRA QTD",
         "CARTEIRA_VALOR": "CARTEIRA R$",
@@ -431,7 +459,7 @@ def gerar_excel(base, resumo, por_movimento):
 
 
 st.title("📊 Análise de alteração de flags")
-st.caption("Cruza alteração de flag com carteira, pré-nota e estoque disponível para venda.")
+st.caption("Cruza alteração de status numérico com carteira, pré-nota e estoque. No e-mail, o status pode vir na coluna chamada FLAG.")
 
 with st.sidebar:
     st.header("Importar arquivos")
@@ -485,7 +513,7 @@ try:
     with aba3:
         st.subheader("Detalhe dos produtos")
         colunas = [
-            "CODIGO", "DESCRICAO", "FLAG_ANTERIOR", "FLAG_NOVA", "MOVIMENTO", "SITUACAO",
+            "CODIGO", "DESCRICAO", "STATUS_ANTERIOR", "STATUS_NOVO", "MOVIMENTO", "SITUACAO", "OBS_STATUS",
             "CARTEIRA_QTD", "CARTEIRA_VALOR", "PRE_NOTA_QTD", "PRE_NOTA_VALOR",
             "NAO_FATURADO_QTD", "NAO_FATURADO_VALOR", "PRE_NOTA",
             "DISP_VENDA_QTD", "DISP_VENDA_VALOR", "RESERV_TRANS_QTD", "RESERV_TRANS_VALOR",
