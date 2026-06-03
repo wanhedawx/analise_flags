@@ -1,28 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-APP STREAMLIT - ANÁLISE DE ALTERAÇÃO DE FLAGS x CARTEIRA x ESTOQUE
-
-Como usar:
-1) Instale uma vez:
-   pip install streamlit pandas openpyxl
-
-2) Execute:
-   streamlit run app_analise_flags_streamlit.py
-
-3) Na tela, importe os 3 arquivos:
-   - Alteração de flags recebido por e-mail
-   - Carteira com agendamento / carteira sem pré-nota
-   - Cobertura / Cobertura Pura
-
-Regra por STATUS NUMÉRICO (no e-mail pode vir dentro da coluna FLAG):
-- 9 -> 1/3/4/5/6 = RISCO RUPTURA
-- 1/3/4/5/6 -> 9 = RISCO IMPRODUTIVO
-- Status 1 e 6 recebem observação de CD/redistribuição
-
-Estoque:
-- Usa DISP. VENDA e soma TRANSITO + RESERVA, ignorando FAT. LOJA.
-"""
-
 from io import BytesIO
 import re
 import pandas as pd
@@ -36,8 +11,7 @@ STATUS_NAO_COMPRA = {"9"}
 STATUS_CD_LOJA = {"1", "6"}
 
 st.set_page_config(
-    page_title="Análise de Flags x Carteira x Estoque",
-    page_icon="📊",
+    page_title="Análise de Flags",
     layout="wide",
 )
 
@@ -152,9 +126,6 @@ def carrega_flags(uploaded_file):
         "DESCRIÇÃO", "DESCRICAO", "DESC. PRODUTO", "DESC_PROD", "Desc_Prod", "PRODUTO"
     ], obrigatoria=False)
 
-    # IMPORTANTE: no e-mail vem TROCADo:
-    # - FLAG no e-mail = STATUS numérico da loja
-    # - STATUS no e-mail = FLAG/letra global
     col_status_novo = primeira_coluna_existente(df, [
         "FLAG ABAST", "FLAG NOVA", "NOVA FLAG", "FLAG PROD LOJA", "FLAG PROD CD",
         "FLAG NOVO", "FLAG NOVA PROD", "FLAG"
@@ -220,9 +191,9 @@ def carrega_flags(uploaded_file):
         if nova in STATUS_CD_LOJA or ant in STATUS_CD_LOJA:
             return "STATUS 1/6: validar estoque CD/redistribuição para loja"
         if ant == "9" and nova in STATUS_COMPRA:
-            return "9 -> compra: atenção para ruptura potencial"
+            return "9: atenção para ruptura potencial"
         if ant in STATUS_COMPRA and nova == "9":
-            return "compra -> 9: atenção para estoque/carteira improdutivos"
+            return "9: atenção para estoque/carteira possivel improdutivo"
         return ""
 
     def obs_flag(row):
@@ -231,7 +202,7 @@ def carrega_flags(uploaded_file):
         if ant in FLAGS_RISCO and nova in FLAGS_COMPRA:
             return "flag risco -> compra: atenção para ruptura potencial"
         if ant in FLAGS_COMPRA and nova in FLAGS_RISCO:
-            return "flag compra -> risco: atenção para estoque/carteira improdutivos"
+            return "flag compra -> risco: atenção para estoque/carteira possivel improdutivo"
         return ""
 
     status = base.copy()
@@ -367,7 +338,7 @@ def carrega_cobertura(uploaded_file):
             "Colunas disponíveis:\n" + "\n".join(map(str, df.columns))
         )
 
-    # Soma tudo que for trânsito + reserva. Não usa FAT. LOJA.
+    # Soma tudo que for trânsito + reserva. 
     cols_reserv_trans = colunas_por_palavras(
         df,
         deve_ter_um=["TRANS", "TRANSITO", "RESERV", "RESERVA"],
@@ -475,14 +446,14 @@ def nomes_relatorio(df):
         "CARTEIRA_VALOR": "CARTEIRA R$",
         "PRE_NOTA_QTD": "PRE NOTA QTD",
         "PRE_NOTA_VALOR": "PRE NOTA VALOR",
-        "NAO_FATURADO_QTD": "NÃO FATURADO QTD",
-        "NAO_FATURADO_VALOR": "NÃO FATURADO VALOR",
+        "NAO_FATURADO_QTD": "NÃO FAT. QTD",
+        "NAO_FATURADO_VALOR": "NÃO FAT. VALOR",
         "DISP_VENDA_QTD": "DISP VENDA QTD",
         "DISP_VENDA_VALOR": "DISP VENDA VALOR",
-        "RESERV_TRANS_QTD": "ESTOQUE RESERV/TRANS QTD",
-        "RESERV_TRANS_VALOR": "ESTOQUE RESERV/TRANS VALOR",
-        "TOTAL_ESTOQUE_QTD": "TOTAL IMPACTO ESTOQUE QTD",
-        "TOTAL_ESTOQUE_VALOR": "TOTAL IMPACTO ESTOQUE VALOR",
+        "RESERV_TRANS_QTD": "EST. RESERV/TRANS QTD",
+        "RESERV_TRANS_VALOR": "EST. RESERV/TRANS VALOR",
+        "TOTAL_ESTOQUE_QTD": "TOTAL IMPACTO EST. QTD",
+        "TOTAL_ESTOQUE_VALOR": "TOTAL IMPACTO EST. VALOR",
     }
     return df.rename(columns={k: v for k, v in mapa.items() if k in df.columns})
 
@@ -527,7 +498,7 @@ def gerar_excel(base, resumo, por_movimento):
 
 
 st.title("📊 Análise de alteração de flags")
-st.caption("Cruza as duas análises: STATUS numérico da loja (vem na coluna FLAG do e-mail) e FLAG letra geral (vem na coluna STATUS do e-mail).")
+st.caption("Cruza os status e flags para enxergar possiveis rupturas ou improdutivo")
 
 with st.sidebar:
     st.header("Importar arquivos")
