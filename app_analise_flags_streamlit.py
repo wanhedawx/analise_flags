@@ -113,8 +113,8 @@ def carrega_excel(uploaded_file):
 def carrega_flags(uploaded_file):
     df = carrega_excel(uploaded_file)
 
-    mascara_cabecalho = df.astype(str).apply(
-        lambda r: any("CABEÇALHO DE SISTEMA" in x.upper() for x in r), axis=1
+    mascara_cabecalho = df.apply(
+        lambda r: any("CABEÇALHO DE SISTEMA" in str(x).upper() for x in r), axis=1
     )
     df = df[~mascara_cabecalho].copy()
 
