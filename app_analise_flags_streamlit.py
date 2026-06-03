@@ -1,27 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-APP STREAMLIT - ANÁLISE DE ALTERAÇÃO DE FLAGS x CARTEIRA x ESTOQUE
-
-Como usar:
-1) Instale uma vez:
-   pip install streamlit pandas openpyxl
-
-2) Execute:
-   streamlit run app_analise_flags_streamlit.py
-
-3) Na tela, importe os 3 arquivos:
-   - Alteração de flags recebido por e-mail
-   - Carteira com agendamento / carteira sem pré-nota
-   - Cobertura / Cobertura Pura
-
-Regra:
-- A/I/V/K/L/P -> B/D/F/X = RISCO IMPRODUTIVO
-- B/D/F/X -> A/I/V/K/L/P = RISCO RUPTURA
-
-Estoque:
-- Usa DISP. VEND. / QTD DISP. VENDA como quantidade disponível para venda.
-"""
-
 from io import BytesIO
 import re
 import pandas as pd
