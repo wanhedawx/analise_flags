@@ -846,7 +846,7 @@ try:
     c5.metric("Estoque valor", moeda(total_estoque_valor))
 
     st.download_button(
-        "⬇️ Baixar resultado em Excel",
+        "Baixar resultado em Excel",
         data=excel_bytes,
         file_name="resultado_analise_flags.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
