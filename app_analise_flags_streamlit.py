@@ -330,11 +330,6 @@ with st.sidebar:
     arq_carteira = st.file_uploader("2) Carteira com agendamento", type=["xlsx", "xls"])
     arq_cobertura = st.file_uploader("3) Cobertura / Cobertura Pura", type=["xlsx", "xls"])
 
-    st.divider()
-    st.markdown("**Regra usada**")
-    st.write("A/I/V/K/L/P → B/D/F/X = RISCO IMPRODUTIVO")
-    st.write("B/D/F/X → A/I/V/K/L/P = RISCO RUPTURA")
-    st.write("Estoque = DISP. VEND. / QTD DISP. VENDA")
 
 if not (arq_flags and arq_carteira and arq_cobertura):
     st.info("Importe os 3 arquivos na lateral para gerar a análise.")
@@ -373,8 +368,6 @@ try:
         st.subheader("Resumo por situação")
         st.dataframe(formatar_tabela(resumo), use_container_width=True, hide_index=True)
 
-        graf = resumo.set_index("SITUACAO")[["CARTEIRA_CMV", "ESTOQUE_VALOR"]]
-        st.bar_chart(graf)
 
     with aba2:
         st.subheader("Resumo por movimento")
