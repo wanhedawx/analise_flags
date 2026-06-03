@@ -1,56 +1,24 @@
-# -*- coding: utf-8 -*-
-"""
-APP STREAMLIT - ANÁLISE DE ALTERAÇÃO DE FLAGS/STATUS x CARTEIRA x ESTOQUE
-
-Como usar no Streamlit Cloud:
-1) Salve este arquivo como: app_analise_flags_streamlit.py
-2) No requirements.txt coloque:
-   streamlit
-   pandas
-   openpyxl
-3) Rode localmente, se quiser testar:
-   streamlit run app_analise_flags_streamlit.py
-
-Conceito de negócio usado:
-- Para a empresa:
-  - FLAG = letra: A/I/V/K/L/P/B/D/F/X
-  - STATUS = número: 1/3/4/5/6/9
-- No e-mail/relatório, pode vir invertido:
-  - coluna chamada FLAG pode conter o STATUS numérico por loja.
-  - coluna chamada STATUS pode conter a FLAG letra do produto.
-
-Classificação:
-1) RISCO IMPRODUTIVO
-   - Flag letra: A/I/V/K/L/P -> B/D/F/X
-   - Status número: 1/3/4/5/6 -> 9
-
-2) RISCO RUPTURA
-   - Flag letra: B/D/F/X -> A/I/V/K/L/P
-   - Status número: 9 -> 1/3/4/5/6
-
-Estoque impactado:
-Soma estoque disponível + pedidos + faturado/trânsito + reservas.
-Não soma EMB. COMP., porque é embalagem de compra/embarque de compra.
-"""
-
 from io import BytesIO
 from zipfile import ZipFile, ZIP_DEFLATED
 import re
 import pandas as pd
 import streamlit as st
 
+# REGRAS DO NEGÓCIO
 FLAGS_ATIVAS = {"A", "I", "V", "K", "L", "P"}
 FLAGS_RISCO = {"B", "D", "F", "X"}
+
 STATUS_COMPRA = {"1", "3", "4", "5", "6"}
 STATUS_NAO_COMPRA = {"9"}
 
 st.set_page_config(
-    page_title="Análise de Flags/Status x Carteira x Estoque",
+    page_title="Análise de Alteração de flag",
     page_icon="📊",
     layout="wide",
 )
 
 
+# FUNÇÕES GERAIS
 def moeda(v):
     try:
         return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -58,11 +26,54 @@ def moeda(v):
         return "R$ 0,00"
 
 
+def numero_br(v):
+    try:
+        return f"{float(v):,.0f}".replace(",", ".")
+    except Exception:
+        return "0"
+
+
 def nome_seguro(nome):
     nome = re.sub(r"\.[A-Za-z0-9]+$", "", str(nome))
     nome = re.sub(r"[^A-Za-z0-9_ -]", "", nome).strip()
     nome = re.sub(r"\s+", "_", nome)
     return nome[:80] or "resultado"
+
+
+def normaliza_codigo(valor):
+    if pd.isna(valor):
+        return ""
+    s = str(valor).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return re.sub(r"\D", "", s)
+
+
+def normaliza_flag(valor):
+    """Extrai flag letra: A/I/V/K/L/P/B/D/F/X."""
+    if pd.isna(valor):
+        return ""
+    s = str(valor).strip().upper()
+    # evita pegar letras de textos longos antes de tentar padrão curto
+    tokens = re.findall(r"[A-Z]", s)
+    for t in tokens:
+        if t in FLAGS_ATIVAS or t in FLAGS_RISCO:
+            return t
+    return ""
+
+
+def normaliza_status(valor):
+    """Extrai status numérico: 1/3/4/5/6/9."""
+    if pd.isna(valor):
+        return ""
+    s = str(valor).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    nums = re.findall(r"\d+", s)
+    for n in nums:
+        if n in STATUS_COMPRA or n in STATUS_NAO_COMPRA:
+            return n
+    return ""
 
 
 def limpa_nome_coluna(nome):
@@ -78,53 +89,7 @@ def limpa_nome_coluna(nome):
     for a, b in trocas.items():
         s = s.replace(a, b)
     s = re.sub(r"\s+", " ", s)
-    s = s.replace("º", "")
     return s
-
-
-def normaliza_codigo(valor):
-    if pd.isna(valor):
-        return ""
-    s = str(valor).strip()
-    if s.endswith(".0"):
-        s = s[:-2]
-    return re.sub(r"\D", "", s)
-
-
-def normaliza_flag_letra(valor):
-    if pd.isna(valor):
-        return ""
-    s = str(valor).strip().upper()
-    # Aceita "A", "A - ATIVO", "D DESCONTINUADO".
-    letras = re.findall(r"[A-Z]", s)
-    return letras[0] if letras else ""
-
-
-def normaliza_status_numero(valor):
-    if pd.isna(valor):
-        return ""
-    s = str(valor).strip()
-    if s.endswith(".0"):
-        s = s[:-2]
-    nums = re.findall(r"\d+", s)
-    if not nums:
-        return ""
-    return nums[0]
-
-
-def valor_numerico(serie):
-    if isinstance(serie, (int, float)):
-        return serie
-    if pd.api.types.is_numeric_dtype(serie):
-        return pd.to_numeric(serie, errors="coerce").fillna(0)
-    s = (
-        serie.astype(str)
-        .str.replace("R$", "", regex=False)
-        .str.replace(".", "", regex=False)
-        .str.replace(",", ".", regex=False)
-        .str.strip()
-    )
-    return pd.to_numeric(s, errors="coerce").fillna(0)
 
 
 def primeira_coluna_existente(df, opcoes, obrigatoria=True, contexto=""):
@@ -144,15 +109,29 @@ def primeira_coluna_existente(df, opcoes, obrigatoria=True, contexto=""):
     return None
 
 
-def colunas_por_palavras(df, inclui=None, exclui=None):
-    inclui = inclui or []
-    exclui = exclui or []
+def colunas_existentes(df, opcoes):
+    mapa = {limpa_nome_coluna(c): c for c in df.columns}
     achadas = []
-    for c in df.columns:
-        nome = limpa_nome_coluna(c)
-        if all(p in nome for p in inclui) and not any(p in nome for p in exclui):
-            achadas.append(c)
+    for op in opcoes:
+        chave = limpa_nome_coluna(op)
+        if chave in mapa and mapa[chave] not in achadas:
+            achadas.append(mapa[chave])
     return achadas
+
+
+def valor_numerico(serie):
+    if isinstance(serie, (int, float)):
+        return pd.Series([serie])
+    if pd.api.types.is_numeric_dtype(serie):
+        return pd.to_numeric(serie, errors="coerce").fillna(0)
+    s = (
+        serie.astype(str)
+        .str.replace("R$", "", regex=False)
+        .str.replace(".", "", regex=False)
+        .str.replace(",", ".", regex=False)
+        .str.strip()
+    )
+    return pd.to_numeric(s, errors="coerce").fillna(0)
 
 
 @st.cache_data(show_spinner=False)
@@ -160,50 +139,11 @@ def carrega_excel(uploaded_file):
     return pd.read_excel(uploaded_file)
 
 
-def taxa_valores_validos(serie, tipo):
-    if tipo == "status":
-        vals = serie.map(normaliza_status_numero)
-        return vals.isin(STATUS_COMPRA | STATUS_NAO_COMPRA).mean()
-    vals = serie.map(normaliza_flag_letra)
-    return vals.isin(FLAGS_ATIVAS | FLAGS_RISCO).mean()
-
-
-def localizar_par_colunas(df, opcoes_ant, opcoes_nova, tipo, contexto):
-    """Localiza par anterior/nova. Se nome não bater, tenta inferir por conteúdo."""
-    col_ant = primeira_coluna_existente(df, opcoes_ant, obrigatoria=False)
-    col_nova = primeira_coluna_existente(df, opcoes_nova, obrigatoria=False)
-    if col_ant and col_nova:
-        return col_ant, col_nova
-
-    # Inferência por conteúdo e nome. Útil porque o e-mail pode chamar status numérico de FLAG.
-    candidatos = []
-    for c in df.columns:
-        nome = limpa_nome_coluna(c)
-        score = taxa_valores_validos(df[c], tipo)
-        if score <= 0:
-            continue
-        candidatos.append((c, nome, score))
-
-    anteriores = []
-    novas = []
-    for c, nome, score in candidatos:
-        if any(p in nome for p in ["ANT", "ANTERIOR", "DE ", "OLD"]):
-            anteriores.append((c, score))
-        if any(p in nome for p in ["NOV", "NOVA", "NOVO", "PARA", "ATUAL", "PROD"]):
-            novas.append((c, score))
-
-    if not col_ant and anteriores:
-        col_ant = sorted(anteriores, key=lambda x: x[1], reverse=True)[0][0]
-    if not col_nova and novas:
-        col_nova = sorted(novas, key=lambda x: x[1], reverse=True)[0][0]
-
-    return col_ant, col_nova
-
-
-def carrega_alteracoes(uploaded_file):
+# FLAGS / STATUS DO EMAIL
+def carrega_flags_status(uploaded_file):
     df = carrega_excel(uploaded_file)
 
-    # Remove eventual linha técnica de cabeçalho do sistema.
+    # Corrige erro de float sem upper()
     mascara_cabecalho = df.apply(
         lambda r: any("CABEÇALHO DE SISTEMA" in str(x).upper() for x in r), axis=1
     )
@@ -211,105 +151,78 @@ def carrega_alteracoes(uploaded_file):
 
     col_codigo = primeira_coluna_existente(df, [
         "COD.TOTVS", "COD.TOTVS.1", "CODIGO", "CÓD. PRODUTO", "COD. PRODUTO",
-        "COD PRODUTO", "COD_PROD", "Cod_Prod", "COD PROD", "COD.PRODUTO", "CD ABASTECE"
+        "COD PRODUTO", "COD_PROD", "Cod_Prod", "COD PROD", "COD.PRODUTO"
     ], contexto="do código do produto no arquivo de alteração")
 
     col_desc = primeira_coluna_existente(df, [
         "DESCRIÇÃO", "DESCRICAO", "DESC. PRODUTO", "DESC_PROD", "Desc_Prod", "PRODUTO", "DESCRICAO PRODUTO"
     ], obrigatoria=False)
 
-    col_loja = primeira_coluna_existente(df, [
-        "LOJA", "FILIAL", "COD LOJA", "COD. LOJA", "CD LOJA", "EMPRESA", "UNIDADE"
-    ], obrigatoria=False)
+   
+    col_ant = primeira_coluna_existente(df, [
+        "STATUS ANTERIOR", "FLAG ANTERIOR", "FLAG ANTIGA", "STATUS ANTIGO", "ANTERIOR",
+        "STATUS PROD ANTERIOR", "FLAG ABAST ANTERIOR", "FLAG PROD LOJA ANTERIOR", "STATUS PROD LOJA ANTERIOR",
+        "STATUS PROD CD ANTERIOR", "FLAG PROD CD ANTERIOR"
+    ], contexto="da situação anterior no arquivo de alteração")
 
-    # Para nós: FLAG = letra. No e-mail pode aparecer em coluna STATUS.
-    col_flag_ant, col_flag_nova = localizar_par_colunas(
-        df,
-        opcoes_ant=[
-            "STATUS ANTERIOR", "STATUS PROD ANTERIOR", "STATUS ANTIGO", "STATUS ANT", "ANTERIOR STATUS",
-            "FLAG LETRA ANTERIOR", "FLAG PROD ANTERIOR", "FLAG ANTERIOR LETRA"
-        ],
-        opcoes_nova=[
-            "STATUS PROD", "STATUS NOVO", "STATUS ATUAL", "NOVO STATUS", "STATUS",
-            "FLAG LETRA", "FLAG PROD", "FLAG NOVA LETRA"
-        ],
-        tipo="flag",
-        contexto="da flag letra"
-    )
-
-    # Para nós: STATUS = número. No e-mail pode aparecer em coluna FLAG.
-    col_status_ant, col_status_novo = localizar_par_colunas(
-        df,
-        opcoes_ant=[
-            "FLAG ANTERIOR", "FLAG ABAST ANTERIOR", "FLAG ANTIGA", "FLAG ANT", "ANTERIOR FLAG",
-            "STATUS NUM ANTERIOR", "STATUS ABAST ANTERIOR", "MODO ABAST ANTERIOR"
-        ],
-        opcoes_nova=[
-            "FLAG ABAST", "FLAG NOVA", "FLAG ATUAL", "NOVA FLAG", "FLAG", "FLAG PROD LOJA", "FLAG PROD CD",
-            "STATUS NUM", "STATUS ABAST", "MODO ABAST", "MODO ABASTECIMENTO"
-        ],
-        tipo="status",
-        contexto="do status numérico"
-    )
+    col_nova = primeira_coluna_existente(df, [
+        "STATUS PROD", "FLAG ABAST", "FLAG NOVA", "STATUS NOVO", "NOVA FLAG", "NOVO STATUS",
+        "FLAG PROD LOJA", "STATUS PROD LOJA", "FLAG PROD CD", "STATUS PROD CD", "STATUS"
+    ], contexto="da situação nova no arquivo de alteração")
 
     out = pd.DataFrame()
     out["CODIGO"] = df[col_codigo].map(normaliza_codigo)
     out["DESCRICAO"] = df[col_desc] if col_desc else ""
-    out["LOJA"] = df[col_loja].astype(str).str.strip() if col_loja else ""
 
-    if col_flag_ant and col_flag_nova:
-        out["FLAG_ANTERIOR"] = df[col_flag_ant].map(normaliza_flag_letra)
-        out["FLAG_NOVA"] = df[col_flag_nova].map(normaliza_flag_letra)
-    else:
-        out["FLAG_ANTERIOR"] = ""
-        out["FLAG_NOVA"] = ""
+    out["VALOR_ANTERIOR_ORIGINAL"] = df[col_ant].astype(str)
+    out["VALOR_NOVO_ORIGINAL"] = df[col_nova].astype(str)
 
-    if col_status_ant and col_status_novo:
-        out["STATUS_ANTERIOR"] = df[col_status_ant].map(normaliza_status_numero)
-        out["STATUS_NOVO"] = df[col_status_novo].map(normaliza_status_numero)
-    else:
-        out["STATUS_ANTERIOR"] = ""
-        out["STATUS_NOVO"] = ""
+    out["FLAG_ANTERIOR"] = df[col_ant].map(normaliza_flag)
+    out["FLAG_NOVA"] = df[col_nova].map(normaliza_flag)
+    out["STATUS_ANTERIOR"] = df[col_ant].map(normaliza_status)
+    out["STATUS_NOVO"] = df[col_nova].map(normaliza_status)
 
     out = out[out["CODIGO"] != ""].copy()
 
     def classificar(row):
-        motivos = []
-        situacoes = set()
-
         fa, fn = row["FLAG_ANTERIOR"], row["FLAG_NOVA"]
         sa, sn = row["STATUS_ANTERIOR"], row["STATUS_NOVO"]
 
-        if fa in FLAGS_ATIVAS and fn in FLAGS_RISCO:
-            situacoes.add("RISCO IMPRODUTIVO")
-            motivos.append("FLAG ATIVA -> FLAG B/D/F/X")
-        elif fa in FLAGS_RISCO and fn in FLAGS_ATIVAS:
-            situacoes.add("RISCO RUPTURA")
-            motivos.append("FLAG B/D/F/X -> FLAG ATIVA")
-
+        # Status numérico por loja tem prioridade quando existir
         if sa in STATUS_COMPRA and sn in STATUS_NAO_COMPRA:
-            situacoes.add("RISCO IMPRODUTIVO")
-            motivos.append("STATUS COMPRA -> 9")
-        elif sa in STATUS_NAO_COMPRA and sn in STATUS_COMPRA:
-            situacoes.add("RISCO RUPTURA")
-            motivos.append("STATUS 9 -> COMPRA")
+            return "RISCO IMPRODUTIVO"
+        if sa in STATUS_NAO_COMPRA and sn in STATUS_COMPRA:
+            return "RISCO RUPTURA"
 
-        if len(situacoes) == 1:
-            return list(situacoes)[0], " + ".join(motivos)
-        if len(situacoes) > 1:
-            return "REVISAR - MOVIMENTOS OPOSTOS", " + ".join(motivos)
-        return "FORA DA REGRA", ""
+        # Flag letra para todas as lojas
+        if fa in FLAGS_ATIVAS and fn in FLAGS_RISCO:
+            return "RISCO IMPRODUTIVO"
+        if fa in FLAGS_RISCO and fn in FLAGS_ATIVAS:
+            return "RISCO RUPTURA"
 
-    classif = out.apply(classificar, axis=1, result_type="expand")
-    out["SITUACAO"] = classif[0]
-    out["MOTIVO"] = classif[1]
-    out["MOVIMENTO_FLAG"] = out["FLAG_ANTERIOR"] + " -> " + out["FLAG_NOVA"]
+        return "FORA DA REGRA"
+
+    def tipo_regra(row):
+        if row["STATUS_ANTERIOR"] and row["STATUS_NOVO"]:
+            return "STATUS NUMÉRICO"
+        if row["FLAG_ANTERIOR"] and row["FLAG_NOVA"]:
+            return "FLAG LETRA"
+        return "NÃO IDENTIFICADO"
+
+    out["TIPO_REGRA"] = out.apply(tipo_regra, axis=1)
     out["MOVIMENTO_STATUS"] = out["STATUS_ANTERIOR"] + " -> " + out["STATUS_NOVO"]
-
+    out["MOVIMENTO_FLAG"] = out["FLAG_ANTERIOR"] + " -> " + out["FLAG_NOVA"]
+    out["MOVIMENTO"] = out.apply(
+        lambda r: r["MOVIMENTO_STATUS"] if r["TIPO_REGRA"] == "STATUS NUMÉRICO" else r["MOVIMENTO_FLAG"],
+        axis=1,
+    )
+    out["SITUACAO"] = out.apply(classificar, axis=1)
     out = out[out["SITUACAO"] != "FORA DA REGRA"].drop_duplicates()
     return out
 
 
+
+# CARTEIRA
 def carrega_carteira(uploaded_file):
     df = carrega_excel(uploaded_file)
 
@@ -320,6 +233,11 @@ def carrega_carteira(uploaded_file):
     col_saldo = primeira_coluna_existente(df, [
         "Saldo R$ (CMV)", "SALDO CMV", "SALDO", "CARTEIRA", "VALOR CARTEIRA", "SALDO R$", "TOTAL CMV"
     ], contexto="do valor de carteira")
+
+    col_qtd = primeira_coluna_existente(df, [
+        "Saldo Qtd", "SALDO QTD", "QTD SALDO", "Quantidade Saldo", "QUANTIDADE SALDO",
+        "QTD CARTEIRA", "CARTEIRA QTD", "Quantidade", "QTD"
+    ], obrigatoria=False)
 
     col_pre_val = primeira_coluna_existente(df, [
         "Pré-nota R$ (CMV)", "PRE-NOTA R$ (CMV)", "PRÉ-NOTA CMV", "PRE NOTA CMV", "PRE NOTA R$", "PRÉ NOTA R$"
@@ -334,6 +252,7 @@ def carrega_carteira(uploaded_file):
     ], obrigatoria=False)
 
     df["CODIGO"] = df[col_codigo].map(normaliza_codigo)
+    df["CARTEIRA_QTD"] = valor_numerico(df[col_qtd]) if col_qtd else 0
     df["CARTEIRA_CMV"] = valor_numerico(df[col_saldo])
     df["PRE_NOTA_CMV"] = valor_numerico(df[col_pre_val]) if col_pre_val else 0
     df["NAO_FATURADO_CMV"] = valor_numerico(df[col_nao_fat]) if col_nao_fat else df["CARTEIRA_CMV"] - df["PRE_NOTA_CMV"]
@@ -345,6 +264,7 @@ def carrega_carteira(uploaded_file):
         df["TEM_PRE_NOTA"] = df["PRE_NOTA_CMV"] > 0
 
     return df.groupby("CODIGO", as_index=False).agg(
+        CARTEIRA_QTD=("CARTEIRA_QTD", "sum"),
         CARTEIRA_CMV=("CARTEIRA_CMV", "sum"),
         PRE_NOTA_CMV=("PRE_NOTA_CMV", "sum"),
         NAO_FATURADO_CMV=("NAO_FATURADO_CMV", "sum"),
@@ -352,30 +272,14 @@ def carrega_carteira(uploaded_file):
     )
 
 
-def soma_colunas(df, opcoes_exatas=None, regras=None):
-    opcoes_exatas = opcoes_exatas or []
-    regras = regras or []
-    cols = []
-    mapa = {limpa_nome_coluna(c): c for c in df.columns}
-
-    for op in opcoes_exatas:
-        chave = limpa_nome_coluna(op)
-        if chave in mapa and mapa[chave] not in cols:
-            cols.append(mapa[chave])
-
-    for c in df.columns:
-        nome = limpa_nome_coluna(c)
-        if c in cols:
-            continue
-        for inclui, exclui in regras:
-            if all(p in nome for p in inclui) and not any(p in nome for p in exclui):
-                cols.append(c)
-                break
-
+# =========================
+# COBERTURA / ESTOQUE
+# =========================
+def soma_grupo(df, opcoes):
+    cols = colunas_existentes(df, opcoes)
     if not cols:
         return pd.Series(0, index=df.index), []
-
-    total = pd.Series(0, index=df.index, dtype="float64")
+    total = pd.Series(0.0, index=df.index)
     for c in cols:
         total = total + valor_numerico(df[c])
     return total, cols
@@ -389,179 +293,146 @@ def carrega_cobertura(uploaded_file):
     ], contexto="do código do produto na cobertura")
 
     col_cmv = primeira_coluna_existente(df, [
-        "VLR CMV POND.", "CMV", "CUSTO", "CUSTO MEDIO", "CUSTO MÉDIO", "CMV BASE", "CMV UNITARIO", "CMV UNITÁRIO"
+        "VLR CMV POND.", "CMV", "CUSTO", "CUSTO MEDIO", "CUSTO MÉDIO", "CMV BASE"
     ], obrigatoria=False)
 
+    disp_venda, cols_disp = soma_grupo(df, [
+        "DISP. VEND.", "QTD DISP. VENDA", "DISP VEND", "DISP VENDA", "DISPONIVEL VENDA", "DISPONÍVEL VENDA"
+    ])
+
+    cd_atacados, cols_cd = soma_grupo(df, [
+        "EST. CDAL DISP", "EST. CDAL DISP.",
+        "EST. ATCE DISP", "EST. ATCE DISP.",
+        "EST. ATPB DISP", "EST. ATPB DISP.",
+    ])
+
+    reserva, cols_reserva = soma_grupo(df, [
+        "RESERVA CDALxLOJA", "RESERVA CDAL X LOJA", "RESERVA CDAL LOJA",
+        "RESERVA ATCExLOJA", "RESERVA ATCE X LOJA", "RESERVA ATCE LOJA",
+        "RESERVA ATPBxLOJA", "RESERVA ATPB X LOJA", "RESERVA ATPB LOJA",
+        "RESERVA LOJAxLOJA", "RESERVA LOJA X LOJA",
+    ])
+
+    transito, cols_transito = soma_grupo(df, [
+        "FAT. CDAL", "FAT CDAL",
+        "FAT. ATCE", "FAT ATCE",
+        "FAT. ATPB", "FAT ATPB",
+        "FAT. LOJA", "FAT LOJA",
+    ])
+
     df["CODIGO"] = df[col_codigo].map(normaliza_codigo)
-
-    # 1) Estoque disponível físico nos CDs/atacados.
-    df["ESTOQUE_DISP_QTD"], cols_disp = soma_colunas(
-        df,
-        opcoes_exatas=[
-            "EST. CDAL DISP.", "EST CDAL DISP", "EST. ATCE DISP.", "EST ATCE DISP", "EST. ATPB DISP.", "EST ATPB DISP",
-            "QTD DISP. VENDA", "DISP. VEND.", "DISP VEND", "DISP VENDA"
-        ],
-        regras=[
-            (["EST", "DISP"], ["EMB", "COMP"]),
-            (["DISP", "VEND"], ["EMB", "COMP"]),
-        ]
-    )
-
-    # 2) Pedidos em aberto/futuros.
-    df["PEDIDO_QTD"], cols_pedido = soma_colunas(
-        df,
-        opcoes_exatas=["PEDIDO CDAL", "PEDIDO ATCE", "PEDIDO ATPB"],
-        regras=[(["PEDIDO"], ["EMB", "COMP"])]
-    )
-
-    # 3) Faturado / trânsito.
-    df["FATURADO_TRANSITO_QTD"], cols_fat = soma_colunas(
-        df,
-        opcoes_exatas=["FAT. CDAL", "FAT. ATCE", "FAT. ATPB", "FAT CDAL", "FAT ATCE", "FAT ATPB"],
-        regras=[(["FAT"], ["EMB", "COMP"])]
-    )
-
-    # 4) Reservas CD/atacado x loja.
-    df["RESERVA_QTD"], cols_reserva = soma_colunas(
-        df,
-        opcoes_exatas=[
-            "RESERVA CDALxLOJA", "RESERVA ATCExLOJA", "RESERVA ATPBxLOJA",
-            "RESERVA CDAL X LOJA", "RESERVA ATCE X LOJA", "RESERVA ATPB X LOJA"
-        ],
-        regras=[(["RESERVA"], ["EMB", "COMP"])]
-    )
-
-    # EMB. COMP. fica fora por regra de negócio.
-    df["ESTOQUE_IMPACTADO_QTD"] = (
-        df["ESTOQUE_DISP_QTD"]
-        + df["PEDIDO_QTD"]
-        + df["FATURADO_TRANSITO_QTD"]
-        + df["RESERVA_QTD"]
+    df["DISP_VENDA_QTD"] = disp_venda
+    df["CD_ATACADOS_QTD"] = cd_atacados
+    df["RESERVA_QTD"] = reserva
+    df["TRANSITO_QTD"] = transito
+    df["ESTOQUE_IMPACTO_QTD"] = (
+        df["DISP_VENDA_QTD"] + df["CD_ATACADOS_QTD"] + df["RESERVA_QTD"] + df["TRANSITO_QTD"]
     )
 
     if col_cmv:
         df["CMV_UNITARIO"] = valor_numerico(df[col_cmv])
-        df["ESTOQUE_IMPACTADO_VALOR"] = df["ESTOQUE_IMPACTADO_QTD"] * df["CMV_UNITARIO"]
-        df["ESTOQUE_DISP_VALOR"] = df["ESTOQUE_DISP_QTD"] * df["CMV_UNITARIO"]
-        df["PEDIDO_VALOR"] = df["PEDIDO_QTD"] * df["CMV_UNITARIO"]
-        df["FATURADO_TRANSITO_VALOR"] = df["FATURADO_TRANSITO_QTD"] * df["CMV_UNITARIO"]
-        df["RESERVA_VALOR"] = df["RESERVA_QTD"] * df["CMV_UNITARIO"]
     else:
-        df["ESTOQUE_IMPACTADO_VALOR"] = 0
-        df["ESTOQUE_DISP_VALOR"] = 0
-        df["PEDIDO_VALOR"] = 0
-        df["FATURADO_TRANSITO_VALOR"] = 0
-        df["RESERVA_VALOR"] = 0
+        df["CMV_UNITARIO"] = 0
 
-    cobertura = df.groupby("CODIGO", as_index=False).agg(
-        ESTOQUE_DISP_QTD=("ESTOQUE_DISP_QTD", "sum"),
-        PEDIDO_QTD=("PEDIDO_QTD", "sum"),
-        FATURADO_TRANSITO_QTD=("FATURADO_TRANSITO_QTD", "sum"),
+    df["DISP_VENDA_VALOR"] = df["DISP_VENDA_QTD"] * df["CMV_UNITARIO"]
+    df["CD_ATACADOS_VALOR"] = df["CD_ATACADOS_QTD"] * df["CMV_UNITARIO"]
+    df["RESERVA_VALOR"] = df["RESERVA_QTD"] * df["CMV_UNITARIO"]
+    df["TRANSITO_VALOR"] = df["TRANSITO_QTD"] * df["CMV_UNITARIO"]
+    df["ESTOQUE_IMPACTO_VALOR"] = df["ESTOQUE_IMPACTO_QTD"] * df["CMV_UNITARIO"]
+
+    return df.groupby("CODIGO", as_index=False).agg(
+        DISP_VENDA_QTD=("DISP_VENDA_QTD", "sum"),
+        DISP_VENDA_VALOR=("DISP_VENDA_VALOR", "sum"),
+        CD_ATACADOS_QTD=("CD_ATACADOS_QTD", "sum"),
+        CD_ATACADOS_VALOR=("CD_ATACADOS_VALOR", "sum"),
         RESERVA_QTD=("RESERVA_QTD", "sum"),
-        ESTOQUE_IMPACTADO_QTD=("ESTOQUE_IMPACTADO_QTD", "sum"),
-        ESTOQUE_DISP_VALOR=("ESTOQUE_DISP_VALOR", "sum"),
-        PEDIDO_VALOR=("PEDIDO_VALOR", "sum"),
-        FATURADO_TRANSITO_VALOR=("FATURADO_TRANSITO_VALOR", "sum"),
         RESERVA_VALOR=("RESERVA_VALOR", "sum"),
-        ESTOQUE_IMPACTADO_VALOR=("ESTOQUE_IMPACTADO_VALOR", "sum"),
+        TRANSITO_QTD=("TRANSITO_QTD", "sum"),
+        TRANSITO_VALOR=("TRANSITO_VALOR", "sum"),
+        ESTOQUE_IMPACTO_QTD=("ESTOQUE_IMPACTO_QTD", "sum"),
+        ESTOQUE_IMPACTO_VALOR=("ESTOQUE_IMPACTO_VALOR", "sum"),
     )
-    cobertura.attrs["colunas_usadas"] = {
-        "estoque_disponivel": [str(c) for c in cols_disp],
-        "pedido": [str(c) for c in cols_pedido],
-        "faturado_transito": [str(c) for c in cols_fat],
-        "reserva": [str(c) for c in cols_reserva],
-        "excluido": ["EMB. COMP."]
-    }
-    return cobertura
 
 
-def recomendacao(row):
-    situacao = row.get("SITUACAO", "")
-    status_ant = row.get("STATUS_ANTERIOR", "")
-    status_novo = row.get("STATUS_NOVO", "")
-    carteira = row.get("CARTEIRA_CMV", 0)
-    estoque = row.get("ESTOQUE_IMPACTADO_QTD", 0)
-    pedido = row.get("PEDIDO_QTD", 0)
-    reserva = row.get("RESERVA_QTD", 0)
 
-    if situacao == "RISCO IMPRODUTIVO":
-        partes = []
-        if carteira > 0:
-            partes.append("tratar carteira")
-        if estoque > 0:
-            partes.append("definir ação para estoque/pedido/reserva")
-        if status_novo == "9":
-            partes.append("produto/loja deixará de ser comprado")
-        return " | ".join(partes) if partes else "sem carteira/estoque impactado"
-
-    if situacao == "RISCO RUPTURA":
-        partes = []
-        if status_ant == "9" and status_novo in STATUS_COMPRA:
-            partes.append("começará a comprar para a loja")
-        if estoque <= 0 and pedido <= 0 and carteira <= 0:
-            partes.append("alto risco: sem estoque, pedido e carteira")
-        elif estoque <= 0:
-            partes.append("atenção: sem estoque disponível")
-        if carteira > 0:
-            partes.append("há carteira consolidada, validar se atende a loja")
-        if reserva > 0:
-            partes.append("há reserva comprometida")
-        return " | ".join(partes) if partes else "monitorar abastecimento"
-
-    return "validar manualmente"
-
-
+# ANÁLISE
 def montar_analise(arq_alteracao, carteira, cobertura):
-    alteracoes = carrega_alteracoes(arq_alteracao)
+    alteracoes = carrega_flags_status(arq_alteracao)
     base = alteracoes.merge(carteira, on="CODIGO", how="left").merge(cobertura, on="CODIGO", how="left")
 
-    num_cols = [
-        "CARTEIRA_CMV", "PRE_NOTA_CMV", "NAO_FATURADO_CMV",
-        "ESTOQUE_DISP_QTD", "PEDIDO_QTD", "FATURADO_TRANSITO_QTD", "RESERVA_QTD", "ESTOQUE_IMPACTADO_QTD",
-        "ESTOQUE_DISP_VALOR", "PEDIDO_VALOR", "FATURADO_TRANSITO_VALOR", "RESERVA_VALOR", "ESTOQUE_IMPACTADO_VALOR",
+    numericas = [
+        "CARTEIRA_QTD", "CARTEIRA_CMV", "PRE_NOTA_CMV", "NAO_FATURADO_CMV",
+        "DISP_VENDA_QTD", "DISP_VENDA_VALOR",
+        "CD_ATACADOS_QTD", "CD_ATACADOS_VALOR",
+        "RESERVA_QTD", "RESERVA_VALOR",
+        "TRANSITO_QTD", "TRANSITO_VALOR",
+        "ESTOQUE_IMPACTO_QTD", "ESTOQUE_IMPACTO_VALOR",
     ]
-    for c in num_cols:
+    for c in numericas:
         if c not in base.columns:
             base[c] = 0
         base[c] = pd.to_numeric(base[c], errors="coerce").fillna(0)
 
-    base["TEM_PRE_NOTA"] = base.get("TEM_PRE_NOTA", False)
     base["TEM_PRE_NOTA"] = base["TEM_PRE_NOTA"].fillna(False)
     base["PRE_NOTA"] = base["TEM_PRE_NOTA"].map(lambda x: "SIM" if bool(x) else "NÃO")
 
     def situacao_operacional(row):
         partes = []
-        partes.append("TEM CARTEIRA" if row["CARTEIRA_CMV"] > 0 else "SEM CARTEIRA")
-        partes.append("TEM ESTOQUE IMPACTADO" if row["ESTOQUE_IMPACTADO_QTD"] > 0 else "SEM ESTOQUE IMPACTADO")
+        partes.append("TEM CARTEIRA" if row["CARTEIRA_CMV"] > 0 or row["CARTEIRA_QTD"] > 0 else "SEM CARTEIRA")
+        partes.append("TEM DISP VENDA" if row["DISP_VENDA_QTD"] > 0 else "SEM DISP VENDA")
+        partes.append("TEM CD/ATACADOS" if row["CD_ATACADOS_QTD"] > 0 else "SEM CD/ATACADOS")
+        partes.append("TEM RESERVA" if row["RESERVA_QTD"] > 0 else "SEM RESERVA")
+        partes.append("TEM TRÂNSITO" if row["TRANSITO_QTD"] > 0 else "SEM TRÂNSITO")
         partes.append("COM PRÉ-NOTA" if bool(row["TEM_PRE_NOTA"]) else "SEM PRÉ-NOTA")
         return " | ".join(partes)
 
-    base["SITUACAO_CARTEIRA_ESTOQUE"] = base.apply(situacao_operacional, axis=1)
-    base["RECOMENDACAO"] = base.apply(recomendacao, axis=1)
+    def acao_sugerida(row):
+        if row["SITUACAO"] == "RISCO IMPRODUTIVO":
+            return "Produto saindo do abastecimento/sortimento: revisar carteira, estoque, reservas e trânsito para evitar improdutivo."
+        if row["SITUACAO"] == "RISCO RUPTURA":
+            if row["ESTOQUE_IMPACTO_QTD"] <= 0 and row["CARTEIRA_QTD"] <= 0 and row["CARTEIRA_CMV"] <= 0:
+                return "Produto voltando para compra/ativo sem carteira e sem estoque: alto risco de ruptura."
+            return "Produto voltando para compra/ativo: validar cobertura existente e necessidade de compra."
+        return ""
+
+    base["SITUACAO_OPERACIONAL"] = base.apply(situacao_operacional, axis=1)
+    base["ACAO_SUGERIDA"] = base.apply(acao_sugerida, axis=1)
 
     resumo = base.groupby("SITUACAO", as_index=False).agg(
         ITENS=("CODIGO", "nunique"),
+        CARTEIRA_QTD=("CARTEIRA_QTD", "sum"),
         CARTEIRA_CMV=("CARTEIRA_CMV", "sum"),
         PRE_NOTA_CMV=("PRE_NOTA_CMV", "sum"),
         NAO_FATURADO_CMV=("NAO_FATURADO_CMV", "sum"),
-        ESTOQUE_DISP_QTD=("ESTOQUE_DISP_QTD", "sum"),
-        PEDIDO_QTD=("PEDIDO_QTD", "sum"),
-        FATURADO_TRANSITO_QTD=("FATURADO_TRANSITO_QTD", "sum"),
+        DISP_VENDA_QTD=("DISP_VENDA_QTD", "sum"),
+        DISP_VENDA_VALOR=("DISP_VENDA_VALOR", "sum"),
+        CD_ATACADOS_QTD=("CD_ATACADOS_QTD", "sum"),
+        CD_ATACADOS_VALOR=("CD_ATACADOS_VALOR", "sum"),
         RESERVA_QTD=("RESERVA_QTD", "sum"),
-        ESTOQUE_IMPACTADO_QTD=("ESTOQUE_IMPACTADO_QTD", "sum"),
-        ESTOQUE_IMPACTADO_VALOR=("ESTOQUE_IMPACTADO_VALOR", "sum"),
+        RESERVA_VALOR=("RESERVA_VALOR", "sum"),
+        TRANSITO_QTD=("TRANSITO_QTD", "sum"),
+        TRANSITO_VALOR=("TRANSITO_VALOR", "sum"),
+        ESTOQUE_IMPACTO_QTD=("ESTOQUE_IMPACTO_QTD", "sum"),
+        ESTOQUE_IMPACTO_VALOR=("ESTOQUE_IMPACTO_VALOR", "sum"),
     )
 
-    por_movimento = base.groupby(["SITUACAO", "MOVIMENTO_FLAG", "MOVIMENTO_STATUS", "MOTIVO"], as_index=False).agg(
+    por_movimento = base.groupby(["SITUACAO", "TIPO_REGRA", "MOVIMENTO"], as_index=False).agg(
         ITENS=("CODIGO", "nunique"),
+        CARTEIRA_QTD=("CARTEIRA_QTD", "sum"),
         CARTEIRA_CMV=("CARTEIRA_CMV", "sum"),
-        ESTOQUE_IMPACTADO_QTD=("ESTOQUE_IMPACTADO_QTD", "sum"),
-        ESTOQUE_IMPACTADO_VALOR=("ESTOQUE_IMPACTADO_VALOR", "sum"),
+        DISP_VENDA_QTD=("DISP_VENDA_QTD", "sum"),
+        CD_ATACADOS_QTD=("CD_ATACADOS_QTD", "sum"),
+        RESERVA_QTD=("RESERVA_QTD", "sum"),
+        TRANSITO_QTD=("TRANSITO_QTD", "sum"),
+        ESTOQUE_IMPACTO_QTD=("ESTOQUE_IMPACTO_QTD", "sum"),
+        ESTOQUE_IMPACTO_VALOR=("ESTOQUE_IMPACTO_VALOR", "sum"),
     )
 
     return base, resumo, por_movimento
 
 
+
+# EXPORTAÇÃO
 def gerar_excel(base, resumo, por_movimento):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -584,7 +455,7 @@ def gerar_excel(base, resumo, por_movimento):
                 for cell in col:
                     if cell.value is not None:
                         max_len = max(max_len, len(str(cell.value)))
-                ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 50)
+                ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 45)
 
     output.seek(0)
     return output.getvalue()
@@ -600,24 +471,35 @@ def gerar_zip(resultados):
 
 
 def formatar_tabela(df):
-    money_cols = [c for c in df.columns if c.endswith("CMV") or c.endswith("VALOR")]
-    fmt = {c: moeda for c in money_cols}
-    qtd_cols = [c for c in df.columns if c.endswith("QTD")]
+    money_cols = [
+        "CARTEIRA_CMV", "PRE_NOTA_CMV", "NAO_FATURADO_CMV",
+        "DISP_VENDA_VALOR", "CD_ATACADOS_VALOR", "RESERVA_VALOR", "TRANSITO_VALOR",
+        "ESTOQUE_IMPACTO_VALOR",
+    ]
+    fmt = {c: moeda for c in money_cols if c in df.columns}
+
+    qtd_cols = [
+        "ITENS", "CARTEIRA_QTD", "DISP_VENDA_QTD", "CD_ATACADOS_QTD",
+        "RESERVA_QTD", "TRANSITO_QTD", "ESTOQUE_IMPACTO_QTD",
+    ]
     for c in qtd_cols:
-        fmt[c] = "{:.0f}"
+        if c in df.columns:
+            fmt[c] = "{:.0f}"
     return df.style.format(fmt)
 
 
-st.title("📊 Análise de alteração de flags/status")
-st.caption("Cruza alteração de flag/status com carteira, pré-nota e estoque impactado.")
+# TELA STREAMLIT
+
+st.title("📊 Análise de alteração de flag")
+st.caption("Analisa flags/letras e status/números, cruzando com carteira, pré-nota, disponibilidade, CD/atacados, reserva e trânsito.")
 
 with st.sidebar:
     st.header("Importar arquivos")
     arq_alteracoes_lista = st.file_uploader(
-        "1) Alteração de flags/status",
+        "1) Alteração de flag/status",
         type=["xlsx", "xls"],
         accept_multiple_files=True,
-        help="Você pode selecionar um ou vários arquivos recebidos por e-mail."
+        help="Você pode selecionar um ou vários arquivos recebidos por e-mail.",
     )
     arq_carteira = st.file_uploader("2) Carteira com agendamento", type=["xlsx", "xls"])
     arq_cobertura = st.file_uploader("3) Cobertura / Cobertura Pura", type=["xlsx", "xls"])
@@ -634,41 +516,39 @@ try:
     resultados_zip = []
     bases_consolidadas = []
 
-    st.success("Arquivos carregados. Análise concluída.")
+    for idx, arq_alteracao in enumerate(arq_alteracoes_lista, start=1):
+        nome_base = nome_seguro(arq_alteracao.name)
 
-    with st.expander("Ver composição do estoque impactado"):
-        st.write("O app soma estoque disponível + pedido + faturado/trânsito + reserva. EMB. COMP. fica fora.")
-        st.json(cobertura.attrs.get("colunas_usadas", {}))
-
-    for idx, arq_alt in enumerate(arq_alteracoes_lista, start=1):
-        nome_base = nome_seguro(arq_alt.name)
-
-        with st.spinner(f"Processando {arq_alt.name}..."):
-            base, resumo, por_movimento = montar_analise(arq_alt, carteira, cobertura)
+        with st.spinner(f"Processando {arq_alteracao.name}..."):
+            base, resumo, por_movimento = montar_analise(arq_alteracao, carteira, cobertura)
             excel_bytes = gerar_excel(base, resumo, por_movimento)
             resultados_zip.append((f"resultado_{nome_base}.xlsx", excel_bytes))
             base_tmp = base.copy()
-            base_tmp["ARQUIVO_ALTERACAO"] = arq_alt.name
+            base_tmp["ARQUIVO_ALTERACAO"] = arq_alteracao.name
             bases_consolidadas.append(base_tmp)
 
         st.markdown("---")
-        st.subheader(f"📄 {idx}. {arq_alt.name}")
+        st.subheader(f"📄 {idx}. {arq_alteracao.name}")
 
         total_itens = int(base["CODIGO"].nunique())
+        total_carteira_qtd = base["CARTEIRA_QTD"].sum()
         total_carteira = base["CARTEIRA_CMV"].sum()
-        total_pre_nota = base["PRE_NOTA_CMV"].sum()
-        total_estoque_qtd = base["ESTOQUE_IMPACTADO_QTD"].sum()
-        total_estoque_valor = base["ESTOQUE_IMPACTADO_VALOR"].sum()
+        total_impacto_qtd = base["ESTOQUE_IMPACTO_QTD"].sum()
+        total_impacto_valor = base["ESTOQUE_IMPACTO_VALOR"].sum()
+        qtd_improd = int(base.loc[base["SITUACAO"] == "RISCO IMPRODUTIVO", "CODIGO"].nunique())
+        qtd_rupt = int(base.loc[base["SITUACAO"] == "RISCO RUPTURA", "CODIGO"].nunique())
 
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Itens impactados", f"{total_itens:,.0f}".replace(",", "."))
-        c2.metric("Carteira", moeda(total_carteira))
-        c3.metric("Pré-nota", moeda(total_pre_nota))
-        c4.metric("Estoque impactado qtd", f"{total_estoque_qtd:,.0f}".replace(",", "."))
-        c5.metric("Estoque impactado valor", moeda(total_estoque_valor))
+        c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+        c1.metric("Itens", numero_br(total_itens))
+        c2.metric("Qtd Carteira", numero_br(total_carteira_qtd))
+        c3.metric("Carteira R$", moeda(total_carteira))
+        c4.metric("Estoque Impacto Qtd", numero_br(total_impacto_qtd))
+        c5.metric("Estoque Impacto R$", moeda(total_impacto_valor))
+        c6.metric("Risco Improdutivo", numero_br(qtd_improd))
+        c7.metric("Risco Ruptura", numero_br(qtd_rupt))
 
         st.download_button(
-            f"⬇️ Baixar Excel - {arq_alt.name}",
+            f"⬇️ Baixar Excel - {arq_alteracao.name}",
             data=excel_bytes,
             file_name=f"resultado_{nome_base}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -679,7 +559,16 @@ try:
 
         with aba1:
             st.subheader("Resumo por situação")
-            st.dataframe(formatar_tabela(resumo), use_container_width=True, hide_index=True)
+            ordem_resumo = [
+                "SITUACAO", "ITENS", "CARTEIRA_QTD", "CARTEIRA_CMV", "PRE_NOTA_CMV", "NAO_FATURADO_CMV",
+                "DISP_VENDA_QTD", "DISP_VENDA_VALOR",
+                "CD_ATACADOS_QTD", "CD_ATACADOS_VALOR",
+                "RESERVA_QTD", "RESERVA_VALOR",
+                "TRANSITO_QTD", "TRANSITO_VALOR",
+                "ESTOQUE_IMPACTO_QTD", "ESTOQUE_IMPACTO_VALOR",
+            ]
+            ordem_resumo = [c for c in ordem_resumo if c in resumo.columns]
+            st.dataframe(formatar_tabela(resumo[ordem_resumo]), use_container_width=True, hide_index=True)
 
         with aba2:
             st.subheader("Resumo por movimento")
@@ -688,14 +577,15 @@ try:
         with aba3:
             st.subheader("Detalhe dos produtos")
             colunas = [
-                "CODIGO", "DESCRICAO", "LOJA",
-                "FLAG_ANTERIOR", "FLAG_NOVA", "MOVIMENTO_FLAG",
-                "STATUS_ANTERIOR", "STATUS_NOVO", "MOVIMENTO_STATUS",
-                "SITUACAO", "MOTIVO", "RECOMENDACAO",
-                "CARTEIRA_CMV", "PRE_NOTA_CMV", "NAO_FATURADO_CMV", "PRE_NOTA",
-                "ESTOQUE_DISP_QTD", "PEDIDO_QTD", "FATURADO_TRANSITO_QTD", "RESERVA_QTD",
-                "ESTOQUE_IMPACTADO_QTD", "ESTOQUE_IMPACTADO_VALOR",
-                "SITUACAO_CARTEIRA_ESTOQUE",
+                "CODIGO", "DESCRICAO", "TIPO_REGRA", "MOVIMENTO", "SITUACAO",
+                "STATUS_ANTERIOR", "STATUS_NOVO", "FLAG_ANTERIOR", "FLAG_NOVA",
+                "CARTEIRA_QTD", "CARTEIRA_CMV", "PRE_NOTA_CMV", "NAO_FATURADO_CMV", "PRE_NOTA",
+                "DISP_VENDA_QTD", "DISP_VENDA_VALOR",
+                "CD_ATACADOS_QTD", "CD_ATACADOS_VALOR",
+                "RESERVA_QTD", "RESERVA_VALOR",
+                "TRANSITO_QTD", "TRANSITO_VALOR",
+                "ESTOQUE_IMPACTO_QTD", "ESTOQUE_IMPACTO_VALOR",
+                "SITUACAO_OPERACIONAL", "ACAO_SUGERIDA",
             ]
             colunas = [c for c in colunas if c in base.columns]
             st.dataframe(formatar_tabela(base[colunas]), use_container_width=True, hide_index=True)
@@ -704,7 +594,7 @@ try:
             st.subheader("Consultar produto ou situação")
             situacoes = ["Todas"] + sorted(base["SITUACAO"].dropna().unique().tolist())
             sit = st.selectbox("Situação", situacoes, key=f"situacao_{idx}_{nome_base}")
-            busca = st.text_input("Buscar por código, descrição ou loja", key=f"busca_{idx}_{nome_base}")
+            busca = st.text_input("Buscar por código ou descrição", key=f"busca_{idx}_{nome_base}")
 
             filtrado = base.copy()
             if sit != "Todas":
@@ -714,7 +604,6 @@ try:
                 filtrado = filtrado[
                     filtrado["CODIGO"].astype(str).str.upper().str.contains(b, na=False)
                     | filtrado["DESCRICAO"].astype(str).str.upper().str.contains(b, na=False)
-                    | filtrado["LOJA"].astype(str).str.upper().str.contains(b, na=False)
                 ]
             st.dataframe(formatar_tabela(filtrado[colunas]), use_container_width=True, hide_index=True)
 
@@ -724,7 +613,7 @@ try:
         st.download_button(
             "⬇️ Baixar todos os resultados em ZIP",
             data=zip_bytes,
-            file_name="resultados_analise_flags_status.zip",
+            file_name="resultados_analise_alteracoes.zip",
             mime="application/zip",
         )
 
@@ -734,11 +623,20 @@ try:
         base_geral = pd.concat(bases_consolidadas, ignore_index=True)
         resumo_geral = base_geral.groupby("SITUACAO", as_index=False).agg(
             ITENS=("CODIGO", "nunique"),
+            CARTEIRA_QTD=("CARTEIRA_QTD", "sum"),
             CARTEIRA_CMV=("CARTEIRA_CMV", "sum"),
             PRE_NOTA_CMV=("PRE_NOTA_CMV", "sum"),
             NAO_FATURADO_CMV=("NAO_FATURADO_CMV", "sum"),
-            ESTOQUE_IMPACTADO_QTD=("ESTOQUE_IMPACTADO_QTD", "sum"),
-            ESTOQUE_IMPACTADO_VALOR=("ESTOQUE_IMPACTADO_VALOR", "sum"),
+            DISP_VENDA_QTD=("DISP_VENDA_QTD", "sum"),
+            DISP_VENDA_VALOR=("DISP_VENDA_VALOR", "sum"),
+            CD_ATACADOS_QTD=("CD_ATACADOS_QTD", "sum"),
+            CD_ATACADOS_VALOR=("CD_ATACADOS_VALOR", "sum"),
+            RESERVA_QTD=("RESERVA_QTD", "sum"),
+            RESERVA_VALOR=("RESERVA_VALOR", "sum"),
+            TRANSITO_QTD=("TRANSITO_QTD", "sum"),
+            TRANSITO_VALOR=("TRANSITO_VALOR", "sum"),
+            ESTOQUE_IMPACTO_QTD=("ESTOQUE_IMPACTO_QTD", "sum"),
+            ESTOQUE_IMPACTO_VALOR=("ESTOQUE_IMPACTO_VALOR", "sum"),
         )
         st.dataframe(formatar_tabela(resumo_geral), use_container_width=True, hide_index=True)
 
