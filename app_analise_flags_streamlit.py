@@ -1,4 +1,5 @@
 from io import BytesIO
+from pathlib import Path
 import re
 import pandas as pd
 import streamlit as st
@@ -237,6 +238,39 @@ def aplicar_layout():
                 border-radius: 14px !important;
                 border-color: #f0c5a7 !important;
                 background: #fff !important;
+                color: #111827 !important;
+            }
+
+            .stTextInput input,
+            .stSelectbox div[data-baseweb="select"],
+            .stSelectbox div[data-baseweb="select"] *,
+            .stSelectbox [data-baseweb="select"] div,
+            .stSelectbox [data-baseweb="select"] span {
+                background: #fff !important;
+                color: #111827 !important;
+                -webkit-text-fill-color: #111827 !important;
+            }
+
+            .stTextInput input::placeholder {
+                color: #6b7280 !important;
+                -webkit-text-fill-color: #6b7280 !important;
+            }
+
+            .stSelectbox svg {
+                color: #111827 !important;
+                fill: #111827 !important;
+            }
+
+            .carajas-logo-box {
+                background: #ffffff;
+                border: 1px solid var(--borda);
+                border-radius: 22px;
+                padding: 12px;
+                box-shadow: 0 8px 18px rgba(31,25,19,.07);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 96px;
             }
 
             .orange-note {
@@ -250,6 +284,22 @@ def aplicar_layout():
 
 
 aplicar_layout()
+
+
+def caminho_logo():
+    """Procura a logo no repositório. Suba a imagem em um desses caminhos."""
+    opcoes = [
+        Path("img/logo_carajas.png"),
+        Path("img/logo.png"),
+        Path("assets/logo_carajas.png"),
+        Path("assets/logo.png"),
+        Path("logo_carajas.png"),
+        Path("logo.png"),
+    ]
+    for caminho in opcoes:
+        if caminho.exists():
+            return str(caminho)
+    return None
 
 
 def moeda(v):
@@ -427,18 +477,18 @@ def carrega_flags(uploaded_file):
         if nova in STATUS_CD_LOJA or ant in STATUS_CD_LOJA:
             return "STATUS 1/6: validar estoque CD/redistribuição para loja"
         if ant == "9" and nova in STATUS_COMPRA:
-            return "Atenção para ruptura potencial"
+            return "9: atenção para ruptura potencial"
         if ant in STATUS_COMPRA and nova == "9":
-            return "Atenção para estoque/carteira possivel improdutivo"
+            return "9: atenção para estoque/carteira possivel improdutivo"
         return ""
 
     def obs_flag(row):
         ant = row["FLAG_ANTERIOR"]
         nova = row["FLAG_NOVA"]
         if ant in FLAGS_RISCO and nova in FLAGS_COMPRA:
-            return "Atenção para ruptura potencial"
+            return "flag risco -> compra: atenção para ruptura potencial"
         if ant in FLAGS_COMPRA and nova in FLAGS_RISCO:
-            return "Atenção para estoque/carteira possivel improdutivo"
+            return "flag compra -> risco: atenção para estoque/carteira possivel improdutivo"
         return ""
 
     status = base.copy()
@@ -733,26 +783,32 @@ def gerar_excel(base, resumo, por_movimento):
 
 
 
-st.markdown(
-    """
-    <div class="app-hero">
-        <div class="brand-line">
-            <div class="brand-mark">▰▰▰</div>
-            <div>
+logo = caminho_logo()
+
+with st.container():
+    c_logo, c_titulo = st.columns([1, 8])
+    with c_logo:
+        if logo:
+            st.image(logo, width=92)
+        else:
+            st.markdown('<div class="brand-mark">▰▰▰</div>', unsafe_allow_html=True)
+    with c_titulo:
+        st.markdown(
+            """
+            <div class="app-hero">
                 <p class="app-title">Análise de alteração de flags</p>
+                <p class="app-subtitle" style="margin-left:0;">Cruza status, flags, carteira, pré-nota e estoque para enxergar possíveis rupturas ou improdutivo.</p>
             </div>
-        </div>
-        <p class="app-subtitle">Cruza status, flags, carteira, pré-nota e estoque para enxergar possíveis rupturas ou improdutivo.</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+            """,
+            unsafe_allow_html=True,
+        )
 
 with st.sidebar:
+    if logo:
+        st.image(logo, width=120)
     st.markdown(
         """
         <div class="sidebar-brand">
-            <div class="sidebar-logo">▰▰▰</div>
             <div class="sidebar-title">Análise de<br>Flags</div>
             <div class="sidebar-dash"></div>
             <div class="sidebar-subtitle">Gestão de alteração de status, carteira e estoque.</div>
@@ -775,7 +831,6 @@ try:
         base, resumo, por_movimento = montar_analise(arq_flags, arq_carteira, arq_cobertura)
         excel_bytes = gerar_excel(base, resumo, por_movimento)
 
-    st.success("Análise concluída.")
 
     total_itens = int(base["CODIGO"].nunique())
     total_carteira = base["CARTEIRA_VALOR"].sum()
