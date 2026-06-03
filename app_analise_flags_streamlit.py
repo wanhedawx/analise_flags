@@ -476,19 +476,39 @@ def carrega_flags(uploaded_file):
     def classificar_status(row):
         ant = row["STATUS_ANTERIOR"]
         nova = row["STATUS_NOVO"]
+
+        # Regra principal do STATUS numérico/loja
         if ant == "9" and nova in STATUS_COMPRA:
             return "RISCO RUPTURA"
         if ant in STATUS_COMPRA and nova == "9":
             return "RISCO IMPRODUTIVO"
+
+        # Fallback: se o arquivo trouxe status novo válido, não some com o item.
+        # Assim o total bate com o arquivo de alteração quando existem mudanças fora da regra clássica.
+        if nova in STATUS_COMPRA:
+            return "RISCO RUPTURA"
+        if nova in STATUS_NAO_COMPRA:
+            return "RISCO IMPRODUTIVO"
+
         return "FORA DA REGRA"
 
     def classificar_flag(row):
         ant = row["FLAG_ANTERIOR"]
         nova = row["FLAG_NOVA"]
+
+        # Regra principal da FLAG letra/global
         if ant in FLAGS_RISCO and nova in FLAGS_COMPRA:
             return "RISCO RUPTURA"
         if ant in FLAGS_COMPRA and nova in FLAGS_RISCO:
             return "RISCO IMPRODUTIVO"
+
+        # Fallback: se a flag nova virou B/D/F/X, entra como risco improdutivo.
+        # Isso evita perder itens cujo anterior vem como O/R/E ou outra letra fora do grupo A/I/V/K/L/P.
+        if nova in FLAGS_RISCO:
+            return "RISCO IMPRODUTIVO"
+        if nova in FLAGS_COMPRA:
+            return "RISCO RUPTURA"
+
         return "FORA DA REGRA"
 
     def obs_status(row):
@@ -509,6 +529,10 @@ def carrega_flags(uploaded_file):
             return "flag risco -> compra: atenção para ruptura potencial"
         if ant in FLAGS_COMPRA and nova in FLAGS_RISCO:
             return "flag compra -> risco: atenção para estoque/carteira possivel improdutivo"
+        if nova in FLAGS_RISCO:
+            return "flag nova em risco: item incluído no impacto improdutivo"
+        if nova in FLAGS_COMPRA:
+            return "flag nova em compra: item incluído no impacto ruptura"
         return ""
 
     partes = []
