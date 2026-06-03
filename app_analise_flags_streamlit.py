@@ -19,7 +19,7 @@ Regra:
 - B/D/F/X -> A/I/V/K/L/P = RISCO RUPTURA
 
 Estoque:
-- Usa DISP. VEND. / QTD DISP. VENDA como quantidade disponível para venda.
+- Usa DISP. VENDA e soma TRANSITO + RESERVA, ignorando FAT. LOJA.
 """
 
 from io import BytesIO
@@ -158,6 +158,40 @@ def carrega_flags(uploaded_file):
     return out
 
 
+def primeira_coluna_por_palavras(df, obrigatorias, opcionais=None, proibidas=None):
+    opcionais = opcionais or []
+    proibidas = proibidas or []
+    for c in df.columns:
+        nome = limpa_nome_coluna(c)
+        if any(p in nome for p in proibidas):
+            continue
+        if all(p in nome for p in obrigatorias) and all(p in nome for p in opcionais):
+            return c
+    return None
+
+
+def colunas_por_palavras(df, deve_ter_um, tambem_deve_ter=None, proibidas=None):
+    tambem_deve_ter = tambem_deve_ter or []
+    proibidas = proibidas or []
+    cols = []
+    for c in df.columns:
+        nome = limpa_nome_coluna(c)
+        if any(p in nome for p in proibidas):
+            continue
+        if any(p in nome for p in deve_ter_um) and all(p in nome for p in tambem_deve_ter):
+            cols.append(c)
+    return list(dict.fromkeys(cols))
+
+
+def soma_colunas_numericas(df, cols):
+    if not cols:
+        return 0
+    total = pd.Series(0, index=df.index, dtype=float)
+    for c in cols:
+        total = total + valor_numerico(df[c])
+    return total
+
+
 def carrega_carteira(uploaded_file):
     df = carrega_excel(uploaded_file)
 
@@ -165,16 +199,28 @@ def carrega_carteira(uploaded_file):
         "Cod_Prod", "COD_PROD", "CODIGO", "CÓD. PRODUTO", "COD. PRODUTO", "COD PRODUTO", "COD PROD", "COD.PRODUTO"
     ], contexto="do código do produto na carteira")
 
-    col_saldo = primeira_coluna_existente(df, [
-        "Saldo R$ (CMV)", "SALDO CMV", "SALDO", "CARTEIRA", "VALOR CARTEIRA", "SALDO R$", "TOTAL CMV"
+    col_carteira_val = primeira_coluna_existente(df, [
+        "Saldo R$ (CMV)", "SALDO R$ CMV", "SALDO CMV", "VALOR CARTEIRA", "CARTEIRA R$", "SALDO R$", "TOTAL CMV"
     ], contexto="do valor de carteira")
 
-    col_pre_val = primeira_coluna_existente(df, [
-        "Pré-nota R$ (CMV)", "PRE-NOTA R$ (CMV)", "PRÉ-NOTA CMV", "PRE NOTA CMV", "PRE NOTA R$", "PRÉ NOTA R$"
+    col_carteira_qtd = primeira_coluna_existente(df, [
+        "Saldo Qtd", "SALDO QTD", "QTD CARTEIRA", "CARTEIRA QTD", "QUANTIDADE CARTEIRA", "QTD SALDO", "SALDO"
     ], obrigatoria=False)
 
-    col_nao_fat = primeira_coluna_existente(df, [
-        "Não Faturado R$ (CMV)", "NAO FATURADO R$ (CMV)", "NÃO FATURADO", "NAO FATURADO", "NAO FATURADO CMV"
+    col_pre_val = primeira_coluna_existente(df, [
+        "Pré-nota R$ (CMV)", "PRE-NOTA R$ (CMV)", "PRÉ-NOTA CMV", "PRE NOTA CMV", "PRE NOTA R$", "PRÉ NOTA R$", "VALOR PRE NOTA", "VALOR PRÉ NOTA"
+    ], obrigatoria=False)
+
+    col_pre_qtd = primeira_coluna_existente(df, [
+        "Pré-nota Qtd", "PRE-NOTA QTD", "PRÉ NOTA QTD", "PRE NOTA QTD", "QTD PRE NOTA", "QTD PRÉ NOTA"
+    ], obrigatoria=False)
+
+    col_nao_fat_val = primeira_coluna_existente(df, [
+        "Não Faturado R$ (CMV)", "NAO FATURADO R$ (CMV)", "NÃO FATURADO R$", "NAO FATURADO R$", "NAO FATURADO CMV", "NÃO FATURADO CMV", "VALOR NAO FATURADO", "VALOR NÃO FATURADO"
+    ], obrigatoria=False)
+
+    col_nao_fat_qtd = primeira_coluna_existente(df, [
+        "Não Faturado Qtd", "NAO FATURADO QTD", "NÃO FATURADO QTD", "QTD NAO FATURADO", "QTD NÃO FATURADO"
     ], obrigatoria=False)
 
     col_pre_num = primeira_coluna_existente(df, [
@@ -182,20 +228,26 @@ def carrega_carteira(uploaded_file):
     ], obrigatoria=False)
 
     df["CODIGO"] = df[col_codigo].map(normaliza_codigo)
-    df["CARTEIRA_CMV"] = valor_numerico(df[col_saldo])
-    df["PRE_NOTA_CMV"] = valor_numerico(df[col_pre_val]) if col_pre_val else 0
-    df["NAO_FATURADO_CMV"] = valor_numerico(df[col_nao_fat]) if col_nao_fat else df["CARTEIRA_CMV"] - df["PRE_NOTA_CMV"]
+    df["CARTEIRA_VALOR"] = valor_numerico(df[col_carteira_val])
+    df["CARTEIRA_QTD"] = valor_numerico(df[col_carteira_qtd]) if col_carteira_qtd else 0
+    df["PRE_NOTA_VALOR"] = valor_numerico(df[col_pre_val]) if col_pre_val else 0
+    df["PRE_NOTA_QTD"] = valor_numerico(df[col_pre_qtd]) if col_pre_qtd else 0
+    df["NAO_FATURADO_VALOR"] = valor_numerico(df[col_nao_fat_val]) if col_nao_fat_val else df["CARTEIRA_VALOR"] - df["PRE_NOTA_VALOR"]
+    df["NAO_FATURADO_QTD"] = valor_numerico(df[col_nao_fat_qtd]) if col_nao_fat_qtd else df["CARTEIRA_QTD"] - df["PRE_NOTA_QTD"]
 
     if col_pre_num:
         pre = df[col_pre_num].astype(str).str.strip()
         df["TEM_PRE_NOTA"] = df[col_pre_num].notna() & (~pre.isin(["", "0", "0.0", "nan", "NaN", "None"]))
     else:
-        df["TEM_PRE_NOTA"] = df["PRE_NOTA_CMV"] > 0
+        df["TEM_PRE_NOTA"] = (df["PRE_NOTA_VALOR"] > 0) | (df["PRE_NOTA_QTD"] > 0)
 
     return df.groupby("CODIGO", as_index=False).agg(
-        CARTEIRA_CMV=("CARTEIRA_CMV", "sum"),
-        PRE_NOTA_CMV=("PRE_NOTA_CMV", "sum"),
-        NAO_FATURADO_CMV=("NAO_FATURADO_CMV", "sum"),
+        CARTEIRA_QTD=("CARTEIRA_QTD", "sum"),
+        CARTEIRA_VALOR=("CARTEIRA_VALOR", "sum"),
+        PRE_NOTA_QTD=("PRE_NOTA_QTD", "sum"),
+        PRE_NOTA_VALOR=("PRE_NOTA_VALOR", "sum"),
+        NAO_FATURADO_QTD=("NAO_FATURADO_QTD", "sum"),
+        NAO_FATURADO_VALOR=("NAO_FATURADO_VALOR", "sum"),
         TEM_PRE_NOTA=("TEM_PRE_NOTA", "max"),
     )
 
@@ -211,36 +263,47 @@ def carrega_cobertura(uploaded_file):
         "VLR CMV POND.", "CMV", "CUSTO", "CUSTO MEDIO", "CUSTO MÉDIO", "CMV BASE"
     ], obrigatoria=False)
 
-    col_estoque = primeira_coluna_existente(df, [
+    col_disp = primeira_coluna_existente(df, [
         "QTD DISP. VENDA", "DISP. VEND.", "DISP VEND", "DISP VENDA", "DISPONIVEL VENDA", "DISPONÍVEL VENDA"
     ], obrigatoria=False)
+    if col_disp is None:
+        col_disp = primeira_coluna_por_palavras(df, ["DISP"], ["VEND"], proibidas=["FAT"])
 
-    if col_estoque is None:
-        for c in df.columns:
-            nome = limpa_nome_coluna(c)
-            if "DISP" in nome and ("VEND" in nome or "VENDA" in nome):
-                col_estoque = c
-                break
-
-    if col_estoque is None:
+    if col_disp is None:
         raise ValueError(
-            "Não encontrei a coluna de estoque disponível para venda na cobertura.\n"
-            "Procurei por: QTD DISP. VENDA / DISP. VEND. / DISP VEND.\n\n"
+            "Não encontrei a coluna de DISP. VENDA / QTD DISP. VENDA na cobertura.\n\n"
             "Colunas disponíveis:\n" + "\n".join(map(str, df.columns))
         )
 
+    # Soma tudo que for trânsito + reserva. Não usa FAT. LOJA.
+    cols_reserv_trans = colunas_por_palavras(
+        df,
+        deve_ter_um=["TRANS", "TRANSITO", "RESERV", "RESERVA"],
+        proibidas=["FAT", "FATUR", "LOJA"]
+    )
+    cols_reserv_trans = [c for c in cols_reserv_trans if c != col_disp]
+
     df["CODIGO"] = df[col_codigo].map(normaliza_codigo)
-    df["ESTOQUE_QTD_TOTAL"] = valor_numerico(df[col_estoque])
+    df["DISP_VENDA_QTD"] = valor_numerico(df[col_disp])
+    df["RESERV_TRANS_QTD"] = soma_colunas_numericas(df, cols_reserv_trans)
 
     if col_cmv:
         df["CMV_UNITARIO"] = valor_numerico(df[col_cmv])
-        df["ESTOQUE_VALOR"] = df["ESTOQUE_QTD_TOTAL"] * df["CMV_UNITARIO"]
     else:
-        df["ESTOQUE_VALOR"] = 0
+        df["CMV_UNITARIO"] = 0
+
+    df["DISP_VENDA_VALOR"] = df["DISP_VENDA_QTD"] * df["CMV_UNITARIO"]
+    df["RESERV_TRANS_VALOR"] = df["RESERV_TRANS_QTD"] * df["CMV_UNITARIO"]
+    df["TOTAL_ESTOQUE_QTD"] = df["DISP_VENDA_QTD"] + df["RESERV_TRANS_QTD"]
+    df["TOTAL_ESTOQUE_VALOR"] = df["DISP_VENDA_VALOR"] + df["RESERV_TRANS_VALOR"]
 
     return df.groupby("CODIGO", as_index=False).agg(
-        ESTOQUE_QTD_TOTAL=("ESTOQUE_QTD_TOTAL", "sum"),
-        ESTOQUE_VALOR=("ESTOQUE_VALOR", "sum"),
+        DISP_VENDA_QTD=("DISP_VENDA_QTD", "sum"),
+        DISP_VENDA_VALOR=("DISP_VENDA_VALOR", "sum"),
+        RESERV_TRANS_QTD=("RESERV_TRANS_QTD", "sum"),
+        RESERV_TRANS_VALOR=("RESERV_TRANS_VALOR", "sum"),
+        TOTAL_ESTOQUE_QTD=("TOTAL_ESTOQUE_QTD", "sum"),
+        TOTAL_ESTOQUE_VALOR=("TOTAL_ESTOQUE_VALOR", "sum"),
     )
 
 
@@ -251,7 +314,14 @@ def montar_analise(arq_flags, arq_carteira, arq_cobertura):
 
     base = flags.merge(carteira, on="CODIGO", how="left").merge(cobertura, on="CODIGO", how="left")
 
-    for c in ["CARTEIRA_CMV", "PRE_NOTA_CMV", "NAO_FATURADO_CMV", "ESTOQUE_QTD_TOTAL", "ESTOQUE_VALOR"]:
+    numericas = [
+        "CARTEIRA_QTD", "CARTEIRA_VALOR", "PRE_NOTA_QTD", "PRE_NOTA_VALOR",
+        "NAO_FATURADO_QTD", "NAO_FATURADO_VALOR",
+        "DISP_VENDA_QTD", "DISP_VENDA_VALOR",
+        "RESERV_TRANS_QTD", "RESERV_TRANS_VALOR",
+        "TOTAL_ESTOQUE_QTD", "TOTAL_ESTOQUE_VALOR",
+    ]
+    for c in numericas:
         base[c] = pd.to_numeric(base[c], errors="coerce").fillna(0)
 
     base["TEM_PRE_NOTA"] = base["TEM_PRE_NOTA"].fillna(False)
@@ -259,42 +329,88 @@ def montar_analise(arq_flags, arq_carteira, arq_cobertura):
 
     def situacao_carteira(row):
         partes = []
-        partes.append("TEM CARTEIRA" if row["CARTEIRA_CMV"] > 0 else "SEM CARTEIRA")
-        partes.append("TEM ESTOQUE" if row["ESTOQUE_QTD_TOTAL"] > 0 else "SEM ESTOQUE")
+        partes.append("TEM CARTEIRA" if row["CARTEIRA_VALOR"] > 0 or row["CARTEIRA_QTD"] > 0 else "SEM CARTEIRA")
+        partes.append("TEM ESTOQUE" if row["TOTAL_ESTOQUE_QTD"] > 0 else "SEM ESTOQUE")
         partes.append("COM PRÉ-NOTA" if bool(row["TEM_PRE_NOTA"]) else "SEM PRÉ-NOTA")
         return " | ".join(partes)
 
     base["SITUACAO_CARTEIRA_ESTOQUE"] = base.apply(situacao_carteira, axis=1)
 
     resumo = base.groupby("SITUACAO", as_index=False).agg(
-        ITENS=("CODIGO", "nunique"),
-        CARTEIRA_CMV=("CARTEIRA_CMV", "sum"),
-        PRE_NOTA_CMV=("PRE_NOTA_CMV", "sum"),
-        NAO_FATURADO_CMV=("NAO_FATURADO_CMV", "sum"),
-        ESTOQUE_QTD_TOTAL=("ESTOQUE_QTD_TOTAL", "sum"),
-        ESTOQUE_VALOR=("ESTOQUE_VALOR", "sum"),
+        ITENS_QTD=("CODIGO", "nunique"),
+        CARTEIRA_QTD=("CARTEIRA_QTD", "sum"),
+        CARTEIRA_VALOR=("CARTEIRA_VALOR", "sum"),
+        PRE_NOTA_QTD=("PRE_NOTA_QTD", "sum"),
+        PRE_NOTA_VALOR=("PRE_NOTA_VALOR", "sum"),
+        NAO_FATURADO_QTD=("NAO_FATURADO_QTD", "sum"),
+        NAO_FATURADO_VALOR=("NAO_FATURADO_VALOR", "sum"),
+        DISP_VENDA_QTD=("DISP_VENDA_QTD", "sum"),
+        DISP_VENDA_VALOR=("DISP_VENDA_VALOR", "sum"),
+        RESERV_TRANS_QTD=("RESERV_TRANS_QTD", "sum"),
+        RESERV_TRANS_VALOR=("RESERV_TRANS_VALOR", "sum"),
+        TOTAL_ESTOQUE_QTD=("TOTAL_ESTOQUE_QTD", "sum"),
+        TOTAL_ESTOQUE_VALOR=("TOTAL_ESTOQUE_VALOR", "sum"),
     )
 
     por_movimento = base.groupby(["SITUACAO", "MOVIMENTO"], as_index=False).agg(
-        ITENS=("CODIGO", "nunique"),
-        CARTEIRA_CMV=("CARTEIRA_CMV", "sum"),
-        ESTOQUE_QTD_TOTAL=("ESTOQUE_QTD_TOTAL", "sum"),
-        ESTOQUE_VALOR=("ESTOQUE_VALOR", "sum"),
+        ITENS_QTD=("CODIGO", "nunique"),
+        CARTEIRA_QTD=("CARTEIRA_QTD", "sum"),
+        CARTEIRA_VALOR=("CARTEIRA_VALOR", "sum"),
+        PRE_NOTA_QTD=("PRE_NOTA_QTD", "sum"),
+        PRE_NOTA_VALOR=("PRE_NOTA_VALOR", "sum"),
+        NAO_FATURADO_QTD=("NAO_FATURADO_QTD", "sum"),
+        NAO_FATURADO_VALOR=("NAO_FATURADO_VALOR", "sum"),
+        DISP_VENDA_QTD=("DISP_VENDA_QTD", "sum"),
+        DISP_VENDA_VALOR=("DISP_VENDA_VALOR", "sum"),
+        RESERV_TRANS_QTD=("RESERV_TRANS_QTD", "sum"),
+        RESERV_TRANS_VALOR=("RESERV_TRANS_VALOR", "sum"),
+        TOTAL_ESTOQUE_QTD=("TOTAL_ESTOQUE_QTD", "sum"),
+        TOTAL_ESTOQUE_VALOR=("TOTAL_ESTOQUE_VALOR", "sum"),
     )
 
     return base, resumo, por_movimento
 
 
+def nomes_relatorio(df):
+    mapa = {
+        "SITUACAO": "SITUAÇÃO",
+        "ITENS_QTD": "ITENS QTD",
+        "CARTEIRA_QTD": "CARTEIRA QTD",
+        "CARTEIRA_VALOR": "CARTEIRA R$",
+        "PRE_NOTA_QTD": "PRE NOTA QTD",
+        "PRE_NOTA_VALOR": "PRE NOTA VALOR",
+        "NAO_FATURADO_QTD": "NÃO FATURADO QTD",
+        "NAO_FATURADO_VALOR": "NÃO FATURADO VALOR",
+        "DISP_VENDA_QTD": "DISP VENDA QTD",
+        "DISP_VENDA_VALOR": "DISP VENDA VALOR",
+        "RESERV_TRANS_QTD": "ESTOQUE RESERV/TRANS QTD",
+        "RESERV_TRANS_VALOR": "ESTOQUE RESERV/TRANS VALOR",
+        "TOTAL_ESTOQUE_QTD": "TOTAL IMPACTO ESTOQUE QTD",
+        "TOTAL_ESTOQUE_VALOR": "TOTAL IMPACTO ESTOQUE VALOR",
+    }
+    return df.rename(columns={k: v for k, v in mapa.items() if k in df.columns})
+
+
+def formatar_tabela(df):
+    df = nomes_relatorio(df.copy())
+    money_cols = [c for c in df.columns if "R$" in c or "VALOR" in c]
+    qtd_cols = [c for c in df.columns if "QTD" in c or c == "ITENS QTD"]
+    fmt = {c: moeda for c in money_cols}
+    for c in qtd_cols:
+        fmt[c] = "{:.0f}"
+    return df.style.format(fmt)
+
+
 def gerar_excel(base, resumo, por_movimento):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        resumo.to_excel(writer, sheet_name="Resumo", index=False)
-        por_movimento.to_excel(writer, sheet_name="Por Movimento", index=False)
-        base.to_excel(writer, sheet_name="Detalhe", index=False)
+        nomes_relatorio(resumo).to_excel(writer, sheet_name="Resumo", index=False)
+        nomes_relatorio(por_movimento).to_excel(writer, sheet_name="Por Movimento", index=False)
+        nomes_relatorio(base).to_excel(writer, sheet_name="Detalhe", index=False)
 
         for situacao, dados in base.groupby("SITUACAO"):
             nome = re.sub(r"[^A-Za-z0-9 ]", "", situacao)[:31]
-            dados.to_excel(writer, sheet_name=nome, index=False)
+            nomes_relatorio(dados).to_excel(writer, sheet_name=nome, index=False)
 
         wb = writer.book
         for ws in wb.worksheets:
@@ -312,13 +428,6 @@ def gerar_excel(base, resumo, por_movimento):
     output.seek(0)
     return output.getvalue()
 
-
-def formatar_tabela(df):
-    money_cols = [c for c in df.columns if c.endswith("CMV") or c == "ESTOQUE_VALOR"]
-    fmt = {c: moeda for c in money_cols}
-    if "ESTOQUE_QTD_TOTAL" in df.columns:
-        fmt["ESTOQUE_QTD_TOTAL"] = "{:.0f}"
-    return df.style.format(fmt)
 
 
 st.title("📊 Análise de alteração de flags")
@@ -343,10 +452,10 @@ try:
     st.success("Análise concluída.")
 
     total_itens = int(base["CODIGO"].nunique())
-    total_carteira = base["CARTEIRA_CMV"].sum()
-    total_estoque_qtd = base["ESTOQUE_QTD_TOTAL"].sum()
-    total_estoque_valor = base["ESTOQUE_VALOR"].sum()
-    total_pre_nota = base["PRE_NOTA_CMV"].sum()
+    total_carteira = base["CARTEIRA_VALOR"].sum()
+    total_estoque_qtd = base["TOTAL_ESTOQUE_QTD"].sum()
+    total_estoque_valor = base["TOTAL_ESTOQUE_VALOR"].sum()
+    total_pre_nota = base["PRE_NOTA_VALOR"].sum()
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Itens impactados", f"{total_itens:,.0f}".replace(",", "."))
@@ -377,8 +486,10 @@ try:
         st.subheader("Detalhe dos produtos")
         colunas = [
             "CODIGO", "DESCRICAO", "FLAG_ANTERIOR", "FLAG_NOVA", "MOVIMENTO", "SITUACAO",
-            "CARTEIRA_CMV", "PRE_NOTA_CMV", "NAO_FATURADO_CMV", "PRE_NOTA",
-            "ESTOQUE_QTD_TOTAL", "ESTOQUE_VALOR", "SITUACAO_CARTEIRA_ESTOQUE"
+            "CARTEIRA_QTD", "CARTEIRA_VALOR", "PRE_NOTA_QTD", "PRE_NOTA_VALOR",
+            "NAO_FATURADO_QTD", "NAO_FATURADO_VALOR", "PRE_NOTA",
+            "DISP_VENDA_QTD", "DISP_VENDA_VALOR", "RESERV_TRANS_QTD", "RESERV_TRANS_VALOR",
+            "TOTAL_ESTOQUE_QTD", "TOTAL_ESTOQUE_VALOR", "SITUACAO_CARTEIRA_ESTOQUE"
         ]
         colunas = [c for c in colunas if c in base.columns]
         st.dataframe(formatar_tabela(base[colunas]), use_container_width=True, hide_index=True)
