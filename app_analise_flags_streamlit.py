@@ -191,18 +191,18 @@ def carrega_flags(uploaded_file):
         if nova in STATUS_CD_LOJA or ant in STATUS_CD_LOJA:
             return "STATUS 1/6: validar estoque CD/redistribuição para loja"
         if ant == "9" and nova in STATUS_COMPRA:
-            return "9: atenção para ruptura potencial"
+            return "Atenção para ruptura potencial"
         if ant in STATUS_COMPRA and nova == "9":
-            return "9: atenção para estoque/carteira possivel improdutivo"
+            return "Atenção para estoque/carteira possivel improdutivo"
         return ""
 
     def obs_flag(row):
         ant = row["FLAG_ANTERIOR"]
         nova = row["FLAG_NOVA"]
         if ant in FLAGS_RISCO and nova in FLAGS_COMPRA:
-            return "flag risco -> compra: atenção para ruptura potencial"
+            return "Atenção para ruptura potencial"
         if ant in FLAGS_COMPRA and nova in FLAGS_RISCO:
-            return "flag compra -> risco: atenção para estoque/carteira possivel improdutivo"
+            return "Atenção para estoque/carteira possivel improdutivo"
         return ""
 
     status = base.copy()
