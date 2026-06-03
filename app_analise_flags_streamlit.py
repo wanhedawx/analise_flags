@@ -149,10 +149,11 @@ def aplicar_layout():
             }
 
             .sidebar-title {
-                font-size: 26px;
+                font-size: 22px;
                 line-height: 1.12;
                 font-weight: 800;
                 margin-bottom: 24px;
+                white-space: nowrap;
             }
 
             .sidebar-dash {
@@ -412,45 +413,64 @@ def carrega_flags(uploaded_file):
         "DESCRIÇÃO", "DESCRICAO", "DESC. PRODUTO", "DESC_PROD", "Desc_Prod", "PRODUTO"
     ], obrigatoria=False)
 
-    col_status_novo = primeira_coluna_existente(df, [
-        "FLAG ABAST", "FLAG NOVA", "NOVA FLAG", "FLAG PROD LOJA", "FLAG PROD CD",
-        "FLAG NOVO", "FLAG NOVA PROD", "FLAG"
-    ], obrigatoria=False)
-    col_status_ant = primeira_coluna_existente(df, [
-        "FLAG ANTERIOR", "FLAG ANTIGA", "FLAG ABAST ANTERIOR", "ANTIGA FLAG",
-        "FLAG PROD ANTERIOR", "FLAG ANT"
-    ], obrigatoria=False)
+    def coluna_com_conteudo(candidatas, tipo):
+        """Escolhe a primeira coluna que existe e tem conteúdo útil do tipo pedido."""
+        existentes = []
+        for nome in candidatas:
+            col = primeira_coluna_existente(df, [nome], obrigatoria=False)
+            if col and col not in existentes:
+                existentes.append(col)
 
-    col_flag_nova = primeira_coluna_existente(df, [
+        for col in existentes:
+            serie = df[col]
+            if tipo == "flag":
+                qtd = serie.map(normaliza_flag).astype(str).ne("").sum()
+            else:
+                qtd = serie.map(normaliza_status).astype(str).ne("").sum()
+            if qtd > 0:
+                return col
+        return existentes[0] if existentes else None
+
+    # IMPORTANTE:
+    # No e-mail vem trocado:
+    # - FLAG real/letra vem nas colunas de STATUS.
+    # - STATUS real/número vem nas colunas de FLAG.
+    # Porém alguns arquivos podem vir com colunas vazias. Por isso escolhemos a coluna
+    # que realmente tem letra/número, em vez de pegar só pelo nome.
+    col_flag_nova = coluna_com_conteudo([
         "STATUS PROD", "STATUS NOVO", "STATUS NOVA", "NOVO STATUS", "NOVA STATUS",
         "STATUS PRODUTO", "STATUS"
-    ], obrigatoria=False)
-    col_flag_ant = primeira_coluna_existente(df, [
-        "STATUS ANTERIOR", "STATUS ANTIGO", "STATUS PROD ANTERIOR", "ANTERIOR",
-        "STATUS PRODUTO ANTERIOR", "STATUS ANT"
-    ], obrigatoria=False)
+    ], "flag")
+    col_flag_ant = coluna_com_conteudo([
+        "FLAG ANTERIOR", "STATUS ANTERIOR", "STATUS ANTIGO", "STATUS PROD ANTERIOR",
+        "ANTERIOR", "STATUS PRODUTO ANTERIOR", "STATUS ANT", "FLAG ANTIGA",
+        "FLAG ABAST ANTERIOR", "ANTIGA FLAG", "FLAG PROD ANTERIOR", "FLAG ANT"
+    ], "flag")
 
-    faltando = []
-    if col_status_novo is None or col_status_ant is None:
-        faltando.append("STATUS numérico: no e-mail procuro nas colunas de FLAG / FLAG ANTERIOR")
-    if col_flag_nova is None or col_flag_ant is None:
-        faltando.append("FLAG letra: no e-mail procuro nas colunas de STATUS / STATUS ANTERIOR")
-    if faltando:
+    col_status_novo = coluna_com_conteudo([
+        "FLAG ABAST", "FLAG NOVA", "NOVA FLAG", "FLAG PROD LOJA", "FLAG PROD CD",
+        "FLAG NOVO", "FLAG NOVA PROD", "FLAG"
+    ], "status")
+    col_status_ant = coluna_com_conteudo([
+        "STATUS ANTERIOR", "FLAG ANTERIOR", "FLAG ANTIGA", "FLAG ABAST ANTERIOR",
+        "ANTIGA FLAG", "FLAG PROD ANTERIOR", "FLAG ANT", "STATUS ANTIGO",
+        "STATUS PROD ANTERIOR", "ANTERIOR", "STATUS PRODUTO ANTERIOR", "STATUS ANT"
+    ], "status")
+
+    if (col_flag_nova is None or col_flag_ant is None) and (col_status_novo is None or col_status_ant is None):
         raise ValueError(
-            "Não consegui localizar as colunas para fazer as duas análises.\n\n"
-            + "\n".join(faltando)
-            + "\n\nColunas disponíveis:\n"
-            + "\n".join(map(str, df.columns))
+            "Não consegui localizar colunas válidas para FLAG ou STATUS.\n\n"
+            "Colunas disponíveis:\n" + "\n".join(map(str, df.columns))
         )
 
     base = pd.DataFrame()
     base["CODIGO"] = df[col_codigo].map(normaliza_codigo)
     base["DESCRICAO"] = df[col_desc] if col_desc else ""
 
-    base["STATUS_ANTERIOR"] = df[col_status_ant].map(normaliza_status)
-    base["STATUS_NOVO"] = df[col_status_novo].map(normaliza_status)
-    base["FLAG_ANTERIOR"] = df[col_flag_ant].map(normaliza_flag)
-    base["FLAG_NOVA"] = df[col_flag_nova].map(normaliza_flag)
+    base["STATUS_ANTERIOR"] = df[col_status_ant].map(normaliza_status) if col_status_ant else ""
+    base["STATUS_NOVO"] = df[col_status_novo].map(normaliza_status) if col_status_novo else ""
+    base["FLAG_ANTERIOR"] = df[col_flag_ant].map(normaliza_flag) if col_flag_ant else ""
+    base["FLAG_NOVA"] = df[col_flag_nova].map(normaliza_flag) if col_flag_nova else ""
     base = base[base["CODIGO"] != ""].copy()
 
     def classificar_status(row):
@@ -491,19 +511,24 @@ def carrega_flags(uploaded_file):
             return "flag compra -> risco: atenção para estoque/carteira possivel improdutivo"
         return ""
 
-    status = base.copy()
-    status["ANALISE"] = "STATUS NUMÉRICO / LOJA"
-    status["MOVIMENTO"] = status["STATUS_ANTERIOR"] + " -> " + status["STATUS_NOVO"]
-    status["SITUACAO"] = status.apply(classificar_status, axis=1)
-    status["OBS_ANALISE"] = status.apply(obs_status, axis=1)
+    partes = []
+    if col_status_novo and col_status_ant:
+        status = base.copy()
+        status["ANALISE"] = "STATUS NUMÉRICO / LOJA"
+        status["MOVIMENTO"] = status["STATUS_ANTERIOR"] + " -> " + status["STATUS_NOVO"]
+        status["SITUACAO"] = status.apply(classificar_status, axis=1)
+        status["OBS_ANALISE"] = status.apply(obs_status, axis=1)
+        partes.append(status)
 
-    flag = base.copy()
-    flag["ANALISE"] = "FLAG LETRA / GERAL"
-    flag["MOVIMENTO"] = flag["FLAG_ANTERIOR"] + " -> " + flag["FLAG_NOVA"]
-    flag["SITUACAO"] = flag.apply(classificar_flag, axis=1)
-    flag["OBS_ANALISE"] = flag.apply(obs_flag, axis=1)
+    if col_flag_nova and col_flag_ant:
+        flag = base.copy()
+        flag["ANALISE"] = "FLAG LETRA / GERAL"
+        flag["MOVIMENTO"] = flag["FLAG_ANTERIOR"] + " -> " + flag["FLAG_NOVA"]
+        flag["SITUACAO"] = flag.apply(classificar_flag, axis=1)
+        flag["OBS_ANALISE"] = flag.apply(obs_flag, axis=1)
+        partes.append(flag)
 
-    out = pd.concat([status, flag], ignore_index=True)
+    out = pd.concat(partes, ignore_index=True) if partes else pd.DataFrame()
     out = out[out["SITUACAO"] != "FORA DA REGRA"].drop_duplicates()
     return out
 
@@ -785,23 +810,15 @@ def gerar_excel(base, resumo, por_movimento):
 
 logo = caminho_logo()
 
-with st.container():
-    c_logo, c_titulo = st.columns([1, 8])
-    with c_logo:
-        if logo:
-            st.image(logo, width=92)
-        else:
-            st.markdown('<div class="brand-mark">▰▰▰</div>', unsafe_allow_html=True)
-    with c_titulo:
-        st.markdown(
-            """
-            <div class="app-hero">
-                <p class="app-title">Análise de alteração de flags</p>
-                <p class="app-subtitle" style="margin-left:0;">Cruza status, flags, carteira, pré-nota e estoque para enxergar possíveis rupturas ou improdutivo.</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+st.markdown(
+    """
+    <div class="app-hero">
+        <p class="app-title">Análise de alteração de flags</p>
+        <p class="app-subtitle" style="margin-left:0;">Cruza status, flags, carteira, pré-nota e estoque para enxergar possíveis rupturas ou improdutivo.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 with st.sidebar:
     if logo:
@@ -809,7 +826,7 @@ with st.sidebar:
     st.markdown(
         """
         <div class="sidebar-brand">
-            <div class="sidebar-title">Análise de<br>Flags</div>
+            <div class="sidebar-title">Análise de Flags</div>
             <div class="sidebar-dash"></div>
             <div class="sidebar-subtitle">Gestão de alteração de status, carteira e estoque.</div>
         </div>
@@ -846,7 +863,7 @@ try:
     c5.metric("Estoque valor", moeda(total_estoque_valor))
 
     st.download_button(
-        "Baixar resultado em Excel",
+        "⬇️ Baixar resultado em Excel",
         data=excel_bytes,
         file_name="resultado_analise_flags.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
