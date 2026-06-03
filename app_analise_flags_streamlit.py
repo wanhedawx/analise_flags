@@ -16,6 +16,242 @@ st.set_page_config(
 )
 
 
+# =========================
+# ESTILO VISUAL DO APP
+# =========================
+def aplicar_layout():
+    st.markdown(
+        """
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+            :root {
+                --laranja: #f45b0b;
+                --laranja-2: #ff7a1a;
+                --amarelo: #f4bd24;
+                --preto: #1f1913;
+                --preto-2: #2b251f;
+                --fundo: #f7f2ec;
+                --card: #ffffff;
+                --texto: #081733;
+                --muted: #667085;
+                --borda: #eee1d4;
+            }
+
+            html, body, [class*="css"] {
+                font-family: 'Inter', sans-serif !important;
+            }
+
+            .stApp {
+                background: linear-gradient(90deg, #f7f2ec 0%, #f7f2ec 72%, #fde9dc 72%, #fde9dc 100%);
+                color: var(--texto);
+            }
+
+            section[data-testid="stSidebar"] {
+                background: var(--preto) !important;
+                border-right: 0 !important;
+            }
+
+            section[data-testid="stSidebar"] * {
+                color: #ffffff !important;
+            }
+
+            section[data-testid="stSidebar"] h1,
+            section[data-testid="stSidebar"] h2,
+            section[data-testid="stSidebar"] h3,
+            section[data-testid="stSidebar"] .stMarkdown {
+                color: #ffffff !important;
+            }
+
+            section[data-testid="stSidebar"] [data-testid="stFileUploader"] {
+                background: rgba(255,255,255,0.06);
+                border: 1px solid rgba(255,255,255,0.10);
+                border-radius: 18px;
+                padding: 12px;
+                margin-bottom: 14px;
+            }
+
+            section[data-testid="stSidebar"] [data-testid="stFileUploader"] button {
+                border-radius: 12px !important;
+                border: 1px solid rgba(244,91,11,.55) !important;
+                background: rgba(244,91,11,.12) !important;
+            }
+
+            section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
+                background: rgba(255,255,255,0.08) !important;
+                border: 1px dashed rgba(255,255,255,0.25) !important;
+                border-radius: 16px !important;
+            }
+
+            .main .block-container {
+                max-width: 1240px;
+                padding-top: 2.2rem;
+                padding-bottom: 3rem;
+            }
+
+            .app-hero {
+                background: rgba(255,255,255,0.82);
+                border: 1px solid var(--borda);
+                border-radius: 26px;
+                padding: 26px 30px;
+                box-shadow: 8px 8px 0 rgba(31,25,19,.14);
+                margin-bottom: 22px;
+            }
+
+            .brand-line {
+                display: flex;
+                align-items: center;
+                gap: 16px;
+                margin-bottom: 4px;
+            }
+
+            .brand-mark {
+                width: 62px;
+                height: 62px;
+                border-radius: 50%;
+                background: #fff2e7;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-weight: 900;
+                color: var(--laranja);
+                font-size: 24px;
+                letter-spacing: -5px;
+            }
+
+            .app-title {
+                font-size: 38px;
+                line-height: 1.08;
+                font-weight: 800;
+                color: var(--texto);
+                margin: 0;
+            }
+
+            .app-subtitle {
+                color: var(--muted);
+                font-size: 15px;
+                margin: 8px 0 0 80px;
+            }
+
+            .sidebar-brand {
+                margin: 24px 0 34px 0;
+                padding: 8px 4px;
+            }
+
+            .sidebar-logo {
+                font-size: 52px;
+                line-height: 1;
+                color: var(--laranja) !important;
+                font-weight: 900;
+                letter-spacing: -8px;
+                margin-bottom: 28px;
+            }
+
+            .sidebar-title {
+                font-size: 26px;
+                line-height: 1.12;
+                font-weight: 800;
+                margin-bottom: 24px;
+            }
+
+            .sidebar-dash {
+                width: 42px;
+                height: 4px;
+                background: var(--laranja);
+                border-radius: 999px;
+                margin-bottom: 28px;
+            }
+
+            .sidebar-subtitle {
+                color: rgba(255,255,255,.82) !important;
+                font-size: 14px;
+                line-height: 1.35;
+            }
+
+            div[data-testid="stMetric"] {
+                background: var(--card);
+                border: 1px solid var(--borda);
+                border-radius: 18px;
+                padding: 18px 18px;
+                box-shadow: 0 8px 18px rgba(31,25,19,.07);
+            }
+
+            div[data-testid="stMetric"] label {
+                color: var(--muted) !important;
+                font-weight: 700 !important;
+            }
+
+            div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+                color: var(--texto) !important;
+                font-weight: 800 !important;
+            }
+
+            .stAlert {
+                border-radius: 16px !important;
+                border: 1px solid var(--borda) !important;
+            }
+
+            .stButton > button,
+            .stDownloadButton > button {
+                background: linear-gradient(90deg, var(--laranja), #ef5206) !important;
+                color: white !important;
+                border: 0 !important;
+                border-radius: 14px !important;
+                padding: 0.72rem 1.05rem !important;
+                font-weight: 800 !important;
+                box-shadow: 0 8px 16px rgba(244,91,11,.22);
+            }
+
+            .stTabs [data-baseweb="tab-list"] {
+                gap: 8px;
+                border-bottom: 1px solid var(--borda);
+            }
+
+            .stTabs [data-baseweb="tab"] {
+                background: #fff;
+                border-radius: 14px 14px 0 0;
+                padding: 10px 16px;
+                color: var(--muted);
+                font-weight: 800;
+            }
+
+            .stTabs [aria-selected="true"] {
+                color: var(--laranja) !important;
+                border-bottom: 3px solid var(--laranja) !important;
+            }
+
+            h1, h2, h3 {
+                color: var(--texto) !important;
+                font-weight: 800 !important;
+            }
+
+            [data-testid="stDataFrame"] {
+                background: #fff;
+                border-radius: 18px;
+                padding: 8px;
+                border: 1px solid var(--borda);
+                box-shadow: 0 8px 18px rgba(31,25,19,.05);
+            }
+
+            input, textarea, [data-baseweb="select"] > div {
+                border-radius: 14px !important;
+                border-color: #f0c5a7 !important;
+                background: #fff !important;
+            }
+
+            .orange-note {
+                color: var(--laranja);
+                font-weight: 800;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+aplicar_layout()
+
+
 def moeda(v):
     try:
         return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -497,10 +733,33 @@ def gerar_excel(base, resumo, por_movimento):
 
 
 
-st.title("📊 Análise de alteração de flags")
-st.caption("Cruza os status e flags para enxergar possiveis rupturas ou improdutivo")
+st.markdown(
+    """
+    <div class="app-hero">
+        <div class="brand-line">
+            <div class="brand-mark">▰▰▰</div>
+            <div>
+                <p class="app-title">Análise de alteração de flags</p>
+            </div>
+        </div>
+        <p class="app-subtitle">Cruza status, flags, carteira, pré-nota e estoque para enxergar possíveis rupturas ou improdutivo.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 with st.sidebar:
+    st.markdown(
+        """
+        <div class="sidebar-brand">
+            <div class="sidebar-logo">▰▰▰</div>
+            <div class="sidebar-title">Análise de<br>Flags</div>
+            <div class="sidebar-dash"></div>
+            <div class="sidebar-subtitle">Gestão de alteração de status, carteira e estoque.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.header("Importar arquivos")
     arq_flags = st.file_uploader("1) Alteração de flags", type=["xlsx", "xls"])
     arq_carteira = st.file_uploader("2) Carteira com agendamento", type=["xlsx", "xls"])
