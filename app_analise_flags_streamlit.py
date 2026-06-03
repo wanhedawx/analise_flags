@@ -28,6 +28,9 @@ import re
 import pandas as pd
 import streamlit as st
 
+FLAGS_COMPRA = {"A", "I", "V", "K", "L", "P"}
+FLAGS_RISCO = {"B", "D", "F", "X"}
+
 STATUS_COMPRA = {"1", "3", "4", "5", "6"}
 STATUS_NAO_COMPRA = {"9"}
 STATUS_CD_LOJA = {"1", "6"}
@@ -55,6 +58,18 @@ def normaliza_codigo(valor):
     return re.sub(r"\D", "", s)
 
 
+def normaliza_flag(valor):
+    """Extrai a flag/letra de compra. No e-mail ela pode vir em coluna chamada STATUS."""
+    if pd.isna(valor):
+        return ""
+    s = str(valor).strip().upper()
+    letras = re.findall(r"[A-Z]", s)
+    for letra in letras:
+        if letra in FLAGS_COMPRA or letra in FLAGS_RISCO:
+            return letra
+    return letras[0] if letras else ""
+
+
 def normaliza_status(valor):
     """Extrai o status numérico. No e-mail ele pode vir em coluna chamada FLAG."""
     if pd.isna(valor):
@@ -65,7 +80,6 @@ def normaliza_status(valor):
     numeros = re.findall(r"\d+", s)
     if not numeros:
         return ""
-    # Status válidos que entram na regra atual.
     for n in numeros:
         if n in STATUS_COMPRA or n in STATUS_NAO_COMPRA:
             return n
@@ -132,31 +146,57 @@ def carrega_flags(uploaded_file):
     col_codigo = primeira_coluna_existente(df, [
         "COD.TOTVS", "COD.TOTVS.1", "CODIGO", "CÓD. PRODUTO", "COD. PRODUTO",
         "COD PRODUTO", "COD_PROD", "Cod_Prod", "COD PROD", "COD.PRODUTO"
-    ], contexto="do código do produto no arquivo de flags")
+    ], contexto="do código do produto no arquivo de alteração")
 
     col_desc = primeira_coluna_existente(df, [
         "DESCRIÇÃO", "DESCRICAO", "DESC. PRODUTO", "DESC_PROD", "Desc_Prod", "PRODUTO"
     ], obrigatoria=False)
 
-    col_nova = primeira_coluna_existente(df, [
-        "STATUS PROD", "STATUS NOVO", "STATUS NOVA", "NOVO STATUS",
+    # IMPORTANTE: no e-mail vem TROCADo:
+    # - FLAG no e-mail = STATUS numérico da loja
+    # - STATUS no e-mail = FLAG/letra global
+    col_status_novo = primeira_coluna_existente(df, [
         "FLAG ABAST", "FLAG NOVA", "NOVA FLAG", "FLAG PROD LOJA", "FLAG PROD CD",
-        "STATUS", "FLAG"
-    ], contexto="do status novo no arquivo de flags")
+        "FLAG NOVO", "FLAG NOVA PROD", "FLAG"
+    ], obrigatoria=False)
+    col_status_ant = primeira_coluna_existente(df, [
+        "FLAG ANTERIOR", "FLAG ANTIGA", "FLAG ABAST ANTERIOR", "ANTIGA FLAG",
+        "FLAG PROD ANTERIOR", "FLAG ANT"
+    ], obrigatoria=False)
 
-    col_ant = primeira_coluna_existente(df, [
-        "STATUS ANTERIOR", "STATUS ANTIGO", "ANTERIOR", "STATUS PROD ANTERIOR",
-        "FLAG ANTERIOR", "FLAG ANTIGA", "FLAG ABAST ANTERIOR", "ANTIGA FLAG"
-    ], contexto="do status anterior no arquivo de flags")
+    col_flag_nova = primeira_coluna_existente(df, [
+        "STATUS PROD", "STATUS NOVO", "STATUS NOVA", "NOVO STATUS", "NOVA STATUS",
+        "STATUS PRODUTO", "STATUS"
+    ], obrigatoria=False)
+    col_flag_ant = primeira_coluna_existente(df, [
+        "STATUS ANTERIOR", "STATUS ANTIGO", "STATUS PROD ANTERIOR", "ANTERIOR",
+        "STATUS PRODUTO ANTERIOR", "STATUS ANT"
+    ], obrigatoria=False)
 
-    out = pd.DataFrame()
-    out["CODIGO"] = df[col_codigo].map(normaliza_codigo)
-    out["DESCRICAO"] = df[col_desc] if col_desc else ""
-    out["STATUS_ANTERIOR"] = df[col_ant].map(normaliza_status)
-    out["STATUS_NOVO"] = df[col_nova].map(normaliza_status)
-    out = out[(out["CODIGO"] != "") & (out["STATUS_ANTERIOR"] != "") & (out["STATUS_NOVO"] != "")].copy()
+    faltando = []
+    if col_status_novo is None or col_status_ant is None:
+        faltando.append("STATUS numérico: no e-mail procuro nas colunas de FLAG / FLAG ANTERIOR")
+    if col_flag_nova is None or col_flag_ant is None:
+        faltando.append("FLAG letra: no e-mail procuro nas colunas de STATUS / STATUS ANTERIOR")
+    if faltando:
+        raise ValueError(
+            "Não consegui localizar as colunas para fazer as duas análises.\n\n"
+            + "\n".join(faltando)
+            + "\n\nColunas disponíveis:\n"
+            + "\n".join(map(str, df.columns))
+        )
 
-    def classificar(row):
+    base = pd.DataFrame()
+    base["CODIGO"] = df[col_codigo].map(normaliza_codigo)
+    base["DESCRICAO"] = df[col_desc] if col_desc else ""
+
+    base["STATUS_ANTERIOR"] = df[col_status_ant].map(normaliza_status)
+    base["STATUS_NOVO"] = df[col_status_novo].map(normaliza_status)
+    base["FLAG_ANTERIOR"] = df[col_flag_ant].map(normaliza_flag)
+    base["FLAG_NOVA"] = df[col_flag_nova].map(normaliza_flag)
+    base = base[base["CODIGO"] != ""].copy()
+
+    def classificar_status(row):
         ant = row["STATUS_ANTERIOR"]
         nova = row["STATUS_NOVO"]
         if ant == "9" and nova in STATUS_COMPRA:
@@ -165,7 +205,16 @@ def carrega_flags(uploaded_file):
             return "RISCO IMPRODUTIVO"
         return "FORA DA REGRA"
 
-    def observacao_status(row):
+    def classificar_flag(row):
+        ant = row["FLAG_ANTERIOR"]
+        nova = row["FLAG_NOVA"]
+        if ant in FLAGS_RISCO and nova in FLAGS_COMPRA:
+            return "RISCO RUPTURA"
+        if ant in FLAGS_COMPRA and nova in FLAGS_RISCO:
+            return "RISCO IMPRODUTIVO"
+        return "FORA DA REGRA"
+
+    def obs_status(row):
         ant = row["STATUS_ANTERIOR"]
         nova = row["STATUS_NOVO"]
         if nova in STATUS_CD_LOJA or ant in STATUS_CD_LOJA:
@@ -176,12 +225,30 @@ def carrega_flags(uploaded_file):
             return "compra -> 9: atenção para estoque/carteira improdutivos"
         return ""
 
-    out["MOVIMENTO"] = out["STATUS_ANTERIOR"] + " -> " + out["STATUS_NOVO"]
-    out["SITUACAO"] = out.apply(classificar, axis=1)
-    out["OBS_STATUS"] = out.apply(observacao_status, axis=1)
+    def obs_flag(row):
+        ant = row["FLAG_ANTERIOR"]
+        nova = row["FLAG_NOVA"]
+        if ant in FLAGS_RISCO and nova in FLAGS_COMPRA:
+            return "flag risco -> compra: atenção para ruptura potencial"
+        if ant in FLAGS_COMPRA and nova in FLAGS_RISCO:
+            return "flag compra -> risco: atenção para estoque/carteira improdutivos"
+        return ""
+
+    status = base.copy()
+    status["ANALISE"] = "STATUS NUMÉRICO / LOJA"
+    status["MOVIMENTO"] = status["STATUS_ANTERIOR"] + " -> " + status["STATUS_NOVO"]
+    status["SITUACAO"] = status.apply(classificar_status, axis=1)
+    status["OBS_ANALISE"] = status.apply(obs_status, axis=1)
+
+    flag = base.copy()
+    flag["ANALISE"] = "FLAG LETRA / GERAL"
+    flag["MOVIMENTO"] = flag["FLAG_ANTERIOR"] + " -> " + flag["FLAG_NOVA"]
+    flag["SITUACAO"] = flag.apply(classificar_flag, axis=1)
+    flag["OBS_ANALISE"] = flag.apply(obs_flag, axis=1)
+
+    out = pd.concat([status, flag], ignore_index=True)
     out = out[out["SITUACAO"] != "FORA DA REGRA"].drop_duplicates()
     return out
-
 
 def primeira_coluna_por_palavras(df, obrigatorias, opcionais=None, proibidas=None):
     opcionais = opcionais or []
@@ -361,7 +428,7 @@ def montar_analise(arq_flags, arq_carteira, arq_cobertura):
 
     base["SITUACAO_CARTEIRA_ESTOQUE"] = base.apply(situacao_carteira, axis=1)
 
-    resumo = base.groupby("SITUACAO", as_index=False).agg(
+    resumo = base.groupby(["ANALISE", "SITUACAO"], as_index=False).agg(
         ITENS_QTD=("CODIGO", "nunique"),
         CARTEIRA_QTD=("CARTEIRA_QTD", "sum"),
         CARTEIRA_VALOR=("CARTEIRA_VALOR", "sum"),
@@ -377,7 +444,7 @@ def montar_analise(arq_flags, arq_carteira, arq_cobertura):
         TOTAL_ESTOQUE_VALOR=("TOTAL_ESTOQUE_VALOR", "sum"),
     )
 
-    por_movimento = base.groupby(["SITUACAO", "MOVIMENTO"], as_index=False).agg(
+    por_movimento = base.groupby(["ANALISE", "SITUACAO", "MOVIMENTO"], as_index=False).agg(
         ITENS_QTD=("CODIGO", "nunique"),
         CARTEIRA_QTD=("CARTEIRA_QTD", "sum"),
         CARTEIRA_VALOR=("CARTEIRA_VALOR", "sum"),
@@ -398,10 +465,11 @@ def montar_analise(arq_flags, arq_carteira, arq_cobertura):
 
 def nomes_relatorio(df):
     mapa = {
+        "ANALISE": "ANÁLISE",
         "SITUACAO": "SITUAÇÃO",
         "STATUS_ANTERIOR": "STATUS ANTERIOR",
         "STATUS_NOVO": "STATUS NOVO",
-        "OBS_STATUS": "OBS STATUS",
+        "OBS_ANALISE": "OBS ANÁLISE",
         "ITENS_QTD": "ITENS QTD",
         "CARTEIRA_QTD": "CARTEIRA QTD",
         "CARTEIRA_VALOR": "CARTEIRA R$",
@@ -459,7 +527,7 @@ def gerar_excel(base, resumo, por_movimento):
 
 
 st.title("📊 Análise de alteração de flags")
-st.caption("Cruza alteração de status numérico com carteira, pré-nota e estoque. No e-mail, o status pode vir na coluna chamada FLAG.")
+st.caption("Cruza as duas análises: STATUS numérico da loja (vem na coluna FLAG do e-mail) e FLAG letra geral (vem na coluna STATUS do e-mail).")
 
 with st.sidebar:
     st.header("Importar arquivos")
@@ -513,7 +581,7 @@ try:
     with aba3:
         st.subheader("Detalhe dos produtos")
         colunas = [
-            "CODIGO", "DESCRICAO", "STATUS_ANTERIOR", "STATUS_NOVO", "MOVIMENTO", "SITUACAO", "OBS_STATUS",
+            "CODIGO", "DESCRICAO", "ANALISE", "SITUACAO", "MOVIMENTO", "STATUS_ANTERIOR", "STATUS_NOVO", "FLAG_ANTERIOR", "FLAG_NOVA", "OBS_ANALISE",
             "CARTEIRA_QTD", "CARTEIRA_VALOR", "PRE_NOTA_QTD", "PRE_NOTA_VALOR",
             "NAO_FATURADO_QTD", "NAO_FATURADO_VALOR", "PRE_NOTA",
             "DISP_VENDA_QTD", "DISP_VENDA_VALOR", "RESERV_TRANS_QTD", "RESERV_TRANS_VALOR",
